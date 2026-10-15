@@ -25,5 +25,37 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: janus-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - janus_prometheus_data:/prometheus
+    ports: ["9090:9090"]
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: janus-grafana
+    environment:
+      # Sécurité locale/démo : mot de passe et accès anonyme paramétrables par variables d'environnement.
+      # En environnement de production : définir des mots de passe robustes et désactiver l'accès anonyme (GRAFANA_ANONYMOUS_ENABLED=false).
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-grafana-password-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_ENABLED:-true}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - janus_grafana_data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on:
+      - prometheus
+
 volumes:
   janus_postgres_data:
+  janus_prometheus_data:
+  janus_grafana_data:
