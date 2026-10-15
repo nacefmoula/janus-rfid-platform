@@ -19,6 +19,8 @@ services:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_USER:-janus_app};Password=${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
       TerminalAuth__DemoToken: ${TERMINAL_DEMO_TOKEN:-dev-terminal-token-change-me}
+      AdminAuth__DemoToken: ${ADMIN_DEMO_TOKEN:-dev-admin-token-change-me}
+      Fare__AmountMillimes: ${FARE_AMOUNT_MILLIMES:-1500}
     ports: ["5080:8080"]
     depends_on:
       db:
