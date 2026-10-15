@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rfid_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-rfid_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
+    ports: ["5433:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    build: ./src/Rfid.Api
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__RfidDb: Host=db;Port=5432;Database=${POSTGRES_DB:-rfid_demo};Username=${POSTGRES_USER:-rfid_app};Password=${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
+      TerminalAuth__DemoToken: ${TERMINAL_DEMO_TOKEN:-dev-terminal-token-change-me}
+    ports: ["5080:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  postgres_data:
