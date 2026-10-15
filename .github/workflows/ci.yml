@@ -1,0 +1,166 @@
+name: CI / DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-dotnet:
+    name: 1. Build .NET 10 (Release)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore NuGet dependencies
+        run: dotnet restore src/Janus.Api/Janus.Api.csproj
+
+      - name: Compile API in Release configuration
+        run: dotnet build --configuration Release --no-restore src/Janus.Api/Janus.Api.csproj
+
+      - name: Note on .NET unit testing
+        run: |
+          echo "✔ Native .NET build succeeded."
+          echo "ℹ Note: Le projet ne comporte pas de suite de tests unitaires .NET distincte."
+          echo "La validation fonctionnelle complète est assurée par la suite d'intégration HTTP/PostgreSQL (Job 2)."
+
+  integration-tests:
+    name: 2. Integration Tests & E2E Validation
+    runs-on: ubuntu-latest
+    needs: build-dotnet
+
+    env:
+      POSTGRES_DB: janus_ci_db
+      POSTGRES_USER: janus_ci_user
+      POSTGRES_PASSWORD: ci_test_password_secure_99
+      TERMINAL_DEMO_TOKEN: ci_terminal_token_secure_99
+      ADMIN_DEMO_TOKEN: ci_admin_token_secure_99
+      FARE_AMOUNT_MILLIMES: 1500
+      JANUS_BASE_URL: http://localhost:5080
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Start isolated services (Docker Compose)
+        run: |
+          docker compose up --build -d
+
+      - name: Wait for Janus API availability
+        run: |
+          echo "Attente de la disponibilité de l'API Janus sur $JANUS_BASE_URL/health..."
+          for i in {1..30}; do
+            if curl -sf "$JANUS_BASE_URL/health" > /dev/null 2>&1; then
+              echo "✔ API Janus opérationnelle !"
+              curl -s "$JANUS_BASE_URL/health"
+              echo ""
+              exit 0
+            fi
+            echo "Attente du démarrage du service... tentative $i/30"
+            sleep 2
+          done
+          echo "❌ L'API n'a pas répondu dans le délai imparti."
+          docker compose logs
+          exit 1
+
+      - name: Run 27 Integration Tests (test_api.py)
+        run: |
+          python3 tests/test_api.py
+
+      - name: Run End-to-End Demo Scenario (demo_scenario.py)
+        run: |
+          python3 simulator/demo_scenario.py
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          echo "=== Logs du conteneur API et PostgreSQL ==="
+          docker compose logs
+
+      - name: Teardown isolated containers and volumes
+        if: always()
+        run: |
+          docker compose down -v
+
+  security-scan:
+    name: 3. Container Security Scan (Trivy DevSecOps)
+    runs-on: ubuntu-latest
+    needs: integration-tests
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image from Dockerfile
+        run: |
+          docker build -t janus-api:${{ github.sha }} src/Janus.Api
+
+      # Étape 1 : Génération du rapport SARIF pour audit complet (sévérités HIGH et CRITICAL).
+      # ignore-unfixed: true filtre les vulnérabilités amont sans correctif éditeur disponible.
+      - name: Generate Trivy SARIF report (HIGH & CRITICAL)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: 'janus-api:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      # Étape 2 : Publication du rapport SARIF vers l'onglet GitHub Security (Code scanning alerts).
+      # Note : continue-on-error: true est requis si le dépôt est privé sans licence GitHub Advanced Security (GHAS).
+      # Sur un dépôt public ou avec licence GHAS, le rapport est publié sans interruption.
+      - name: Upload Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-container-security'
+
+      # Étape 3 : Affichage du résumé tabulaire lisible dans la console de CI pour les sévérités HIGH et CRITICAL.
+      - name: Display Trivy audit summary in CI logs (HIGH & CRITICAL)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: 'janus-api:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      # Étape 4 : Contrôle bloquant de sécurité (Quality Gate).
+      # Politique de blocage : Seules les vulnérabilités CRITICAL avec un correctif disponible (actionnables)
+      # provoquent l'échec du job (exit-code: 1). Les vulnérabilités HIGH sont signalées et auditées sans bloquer la pipeline.
+      - name: Enforce Trivy security gate (Fail ONLY on actionable CRITICAL vulnerabilities)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: 'janus-api:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
