@@ -83,6 +83,40 @@ jobs:
           docker compose logs
           exit 1
 
+      - name: Verify Observability Stack (Prometheus & Grafana)
+        run: |
+          echo "Attente de la disponibilité de Prometheus sur http://localhost:9090/-/healthy..."
+          prom_ready=false
+          for i in {1..20}; do
+            if curl -sf "http://localhost:9090/-/healthy" > /dev/null 2>&1; then
+              echo "✔ Prometheus opérationnel !"
+              prom_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$prom_ready" != "true" ]; then
+            echo "❌ Prometheus n'a pas répondu dans le délai imparti."
+            docker compose logs prometheus
+            exit 1
+          fi
+
+          echo "Attente de la disponibilité de Grafana sur http://localhost:3000/api/health..."
+          graf_ready=false
+          for i in {1..20}; do
+            if curl -sf "http://localhost:3000/api/health" > /dev/null 2>&1; then
+              echo "✔ Grafana opérationnel !"
+              graf_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$graf_ready" != "true" ]; then
+            echo "❌ Grafana n'a pas répondu dans le délai imparti."
+            docker compose logs grafana
+            exit 1
+          fi
+
       - name: Run 27 Integration Tests (test_api.py)
         run: |
           python3 tests/test_api.py
@@ -90,6 +124,10 @@ jobs:
       - name: Run End-to-End Demo Scenario (demo_scenario.py)
         run: |
           python3 simulator/demo_scenario.py
+
+      - name: Verify Metrics Scraped by Prometheus
+        run: |
+          python3 tests/verify_metrics.py
 
       - name: Capture container logs on failure
         if: failure()

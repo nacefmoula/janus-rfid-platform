@@ -1,12 +1,35 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using Janus.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<JanusDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("JanusDb")));
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("janus-api", serviceVersion: "1.0.0"))
+    .WithMetrics(metrics => {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddMeter(JanusMetrics.MeterName)
+            .AddMeter("Npgsql")
+            .AddView(
+                instrumentName: "janus_validation_duration_seconds",
+                new ExplicitBucketHistogramConfiguration
+                {
+                    Boundaries = [0.001, 0.002, 0.005, 0.010, 0.025, 0.050, 0.075, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0]
+                })
+            .AddPrometheusExporter();
+    });
+
 var app = builder.Build();
+
+app.MapPrometheusScrapingEndpoint();
 
 await using (var scope = app.Services.CreateAsyncScope()) {
     var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
@@ -256,8 +279,19 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
         return Results.Json(new { error = "unauthorized", message = "Terminal credential missing or invalid." }, statusCode: 401);
 
     const string terminalId = "TERMINAL-DEMO-01";
-    if (request.EventId == Guid.Empty || string.IsNullOrWhiteSpace(request.CardUid) || request.CardUid.Length > 64 || request.EventType != "TRANSPORT_VALIDATION")
+    var validationStartTime = Stopwatch.GetTimestamp();
+
+    if (request.EventId == Guid.Empty || string.IsNullOrWhiteSpace(request.CardUid) || request.CardUid.Length > 64 || request.EventType != "TRANSPORT_VALIDATION") {
+        var elapsedBadReqSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
+        JanusMetrics.ValidationDurationSeconds.Record(elapsedBadReqSeconds,
+            new KeyValuePair<string, object?>("decision", "REJECTED"));
+        JanusMetrics.ValidationsTotal.Add(1,
+            new KeyValuePair<string, object?>("decision", "REJECTED"),
+            new KeyValuePair<string, object?>("reason", "INVALID_REQUEST"),
+            new KeyValuePair<string, object?>("terminal_id", terminalId),
+            new KeyValuePair<string, object?>("duplicate", "false"));
         return Results.BadRequest(new { error = "invalid_request", message = "eventId, cardUid and supported eventType are required." });
+    }
 
     var fareConfig = config["Fare:AmountMillimes"];
     if (!int.TryParse(fareConfig, out var fareAmount) || fareAmount <= 0)
@@ -269,8 +303,26 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
 
     var existing = await db.Validations.AsNoTracking().SingleOrDefaultAsync(v => v.TerminalId == terminalId && v.EventId == request.EventId);
     if (existing is not null) {
-        if (existing.PayloadHash != hash)
+        var elapsedDuplicateSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
+        if (existing.PayloadHash != hash) {
+            JanusMetrics.ValidationDurationSeconds.Record(elapsedDuplicateSeconds,
+                new KeyValuePair<string, object?>("decision", "CONFLICT"));
+            JanusMetrics.ValidationsTotal.Add(1,
+                new KeyValuePair<string, object?>("decision", "CONFLICT"),
+                new KeyValuePair<string, object?>("reason", "IDEMPOTENCY_CONFLICT"),
+                new KeyValuePair<string, object?>("terminal_id", terminalId),
+                new KeyValuePair<string, object?>("duplicate", "false"));
             return Results.Conflict(new { error = "idempotency_conflict", message = "eventId already used with different payload." });
+        }
+
+        JanusMetrics.ValidationDurationSeconds.Record(elapsedDuplicateSeconds,
+            new KeyValuePair<string, object?>("decision", existing.Decision.ToString().ToUpperInvariant()));
+        JanusMetrics.ValidationsTotal.Add(1,
+            new KeyValuePair<string, object?>("decision", existing.Decision.ToString().ToUpperInvariant()),
+            new KeyValuePair<string, object?>("reason", existing.Reason),
+            new KeyValuePair<string, object?>("terminal_id", terminalId),
+            new KeyValuePair<string, object?>("duplicate", "true"));
+
         return Results.Ok(new {
             eventId = existing.EventId,
             terminalId = existing.TerminalId,
@@ -328,6 +380,21 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
         await db.SaveChangesAsync();
         await tx.CommitAsync();
 
+        var elapsedSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
+        JanusMetrics.ValidationDurationSeconds.Record(elapsedSeconds,
+            new KeyValuePair<string, object?>("decision", record.Decision.ToString().ToUpperInvariant()));
+
+        JanusMetrics.ValidationsTotal.Add(1,
+            new KeyValuePair<string, object?>("decision", record.Decision.ToString().ToUpperInvariant()),
+            new KeyValuePair<string, object?>("reason", record.Reason),
+            new KeyValuePair<string, object?>("terminal_id", terminalId),
+            new KeyValuePair<string, object?>("duplicate", "false"));
+
+        if (decision == ValidationDecision.Accepted) {
+            JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount,
+                new KeyValuePair<string, object?>("terminal_id", terminalId));
+        }
+
         return Results.Ok(new {
             eventId = record.EventId,
             terminalId = record.TerminalId,
@@ -347,8 +414,26 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
             logger.LogError(ex, "DbUpdateException occurred during validation but winner record was not found for terminalId={TerminalId}, eventId={EventId}", terminalId, request.EventId);
             throw;
         }
-        if (winner.PayloadHash != hash)
+        var elapsedRaceSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
+        if (winner.PayloadHash != hash) {
+            JanusMetrics.ValidationDurationSeconds.Record(elapsedRaceSeconds,
+                new KeyValuePair<string, object?>("decision", "CONFLICT"));
+            JanusMetrics.ValidationsTotal.Add(1,
+                new KeyValuePair<string, object?>("decision", "CONFLICT"),
+                new KeyValuePair<string, object?>("reason", "IDEMPOTENCY_CONFLICT"),
+                new KeyValuePair<string, object?>("terminal_id", terminalId),
+                new KeyValuePair<string, object?>("duplicate", "false"));
             return Results.Conflict(new { error = "idempotency_conflict", message = "eventId already used with different payload." });
+        }
+
+        JanusMetrics.ValidationDurationSeconds.Record(elapsedRaceSeconds,
+            new KeyValuePair<string, object?>("decision", winner.Decision.ToString().ToUpperInvariant()));
+        JanusMetrics.ValidationsTotal.Add(1,
+            new KeyValuePair<string, object?>("decision", winner.Decision.ToString().ToUpperInvariant()),
+            new KeyValuePair<string, object?>("reason", winner.Reason),
+            new KeyValuePair<string, object?>("terminal_id", terminalId),
+            new KeyValuePair<string, object?>("duplicate", "true"));
+
         return Results.Ok(new {
             eventId = winner.EventId,
             terminalId = winner.TerminalId,
