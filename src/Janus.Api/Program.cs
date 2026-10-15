@@ -12,7 +12,7 @@ await using(var scope=app.Services.CreateAsyncScope()) {
  var db=scope.ServiceProvider.GetRequiredService<JanusDbContext>();
  for(int attempt=0;;attempt++) {
   try {
-   await db.Database.EnsureCreatedAsync();
+   await db.Database.MigrateAsync();
    if(!await db.Cards.AnyAsync()) {
     db.Cards.AddRange(
      new TransitCard{Uid="04A1B2C3D4E5F6",Status=CardStatus.Active,Label="Carte démo active"},
