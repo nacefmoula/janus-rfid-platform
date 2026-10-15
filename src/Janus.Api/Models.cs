@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-namespace Rfid.Api;
+namespace Janus.Api;
 public enum CardStatus { Active=0, Revoked=1 }
 public enum ValidationDecision { Accepted=0, Rejected=1 }
 public sealed class TransitCard { public int Id {get;set;} public required string Uid {get;set;} public CardStatus Status {get;set;} public required string Label {get;set;} }
@@ -10,7 +10,7 @@ public sealed class ValidationEvent {
  public DateTimeOffset? OccurredAt {get;set;} public DateTimeOffset ReceivedAt {get;set;}
 }
 public sealed record ValidationRequest(Guid EventId, string CardUid, DateTimeOffset? OccurredAt, string EventType);
-public sealed class RfidDbContext(DbContextOptions<RfidDbContext> options):DbContext(options) {
+public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbContext(options) {
  public DbSet<TransitCard> Cards=>Set<TransitCard>(); public DbSet<ValidationEvent> Validations=>Set<ValidationEvent>();
  protected override void OnModelCreating(ModelBuilder b) {
   b.Entity<TransitCard>(e=>{e.HasKey(x=>x.Id);e.HasIndex(x=>x.Uid).IsUnique();e.Property(x=>x.Uid).HasMaxLength(64).IsRequired();e.Property(x=>x.Label).HasMaxLength(120).IsRequired();});

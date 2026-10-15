@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY Rfid.Api.csproj ./
+COPY Janus.Api.csproj ./
 RUN dotnet restore
 COPY . ./
 RUN dotnet publish -c Release -o /out --no-restore
@@ -10,4 +10,4 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 COPY --from=build /out ./
 USER $APP_UID
-ENTRYPOINT ["dotnet","Rfid.Api.dll"]
+ENTRYPOINT ["dotnet","Janus.Api.dll"]

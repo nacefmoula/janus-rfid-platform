@@ -1,4 +1,4 @@
-# PFE RFID Transport sécurisé — prototype virtuel
+# Janus RFID Platform — Validation sécurisée de titres de transport
 
 Prototype local sans matériel : ASP.NET Core 10 + PostgreSQL + simulateur Python + tests HTTP.
 
@@ -16,12 +16,12 @@ Token local : `dev-terminal-token-change-me`. Réservé au développement.
 
 ## Simuler
 ```bash
-python3 simulator/rfid_simulator.py
-python3 simulator/rfid_simulator.py --mode replay
-python3 simulator/rfid_simulator.py --mode conflict
-python3 simulator/rfid_simulator.py --mode revoked
-python3 simulator/rfid_simulator.py --mode unknown
-python3 simulator/rfid_simulator.py --mode bad-token
+python3 simulator/janus_simulator.py
+python3 simulator/janus_simulator.py --mode replay
+python3 simulator/janus_simulator.py --mode conflict
+python3 simulator/janus_simulator.py --mode revoked
+python3 simulator/janus_simulator.py --mode unknown
+python3 simulator/janus_simulator.py --mode bad-token
 ```
 
 ## Tests automatiques

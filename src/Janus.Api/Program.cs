@@ -2,14 +2,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Rfid.Api;
+using Janus.Api;
 
 var builder=WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<RfidDbContext>(o=>o.UseNpgsql(builder.Configuration.GetConnectionString("RfidDb")));
+builder.Services.AddDbContext<JanusDbContext>(o=>o.UseNpgsql(builder.Configuration.GetConnectionString("JanusDb")));
 var app=builder.Build();
 
 await using(var scope=app.Services.CreateAsyncScope()) {
- var db=scope.ServiceProvider.GetRequiredService<RfidDbContext>();
+ var db=scope.ServiceProvider.GetRequiredService<JanusDbContext>();
  for(int attempt=0;;attempt++) {
   try {
    await db.Database.EnsureCreatedAsync();
@@ -23,10 +23,10 @@ await using(var scope=app.Services.CreateAsyncScope()) {
   } catch when(attempt<29) { await Task.Delay(TimeSpan.FromSeconds(2)); }
  }
 }
-app.MapGet("/health",()=>Results.Ok(new{status="healthy",service="rfid-api"}));
-app.MapGet("/api/demo/cards",async(RfidDbContext db)=>Results.Ok(await db.Cards.OrderBy(c=>c.Uid).Select(c=>new{c.Uid,status=c.Status.ToString(),c.Label}).ToListAsync()));
+app.MapGet("/health",()=>Results.Ok(new{status="healthy",service="janus-api"}));
+app.MapGet("/api/demo/cards",async(JanusDbContext db)=>Results.Ok(await db.Cards.OrderBy(c=>c.Uid).Select(c=>new{c.Uid,status=c.Status.ToString(),c.Label}).ToListAsync()));
 
-app.MapPost("/api/validations",async(ValidationRequest request,HttpRequest http,IConfiguration config,RfidDbContext db)=>{
+app.MapPost("/api/validations",async(ValidationRequest request,HttpRequest http,IConfiguration config,JanusDbContext db)=>{
  var expected=config["TerminalAuth:DemoToken"];
  var header=http.Headers.Authorization.ToString();
  var supplied=header.StartsWith("Bearer ",StringComparison.OrdinalIgnoreCase)?header[7..].Trim():"";

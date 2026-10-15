@@ -13,7 +13,7 @@ def post(url,token,payload):
   print(f"API inaccessible: {e.reason}. Aucune décision serveur confirmée."); return None
 
 def main():
- p=argparse.ArgumentParser(description="Terminal RFID virtuel sans matériel")
+ p=argparse.ArgumentParser(description="Terminal Janus RFID virtuel sans matériel")
  p.add_argument("--base-url",default="http://localhost:5080");p.add_argument("--token",default="dev-terminal-token-change-me")
  p.add_argument("--uid",default="04A1B2C3D4E5F6");p.add_argument("--event-id",default=None)
  p.add_argument("--mode",choices=["normal","replay","conflict","revoked","unknown","bad-token"],default="normal")
@@ -23,7 +23,7 @@ def main():
  if a.mode=="bad-token":token="invalid-token"
  payload={"eventId":eid,"cardUid":uid,"occurredAt":datetime.now(timezone.utc).isoformat(),"eventType":"TRANSPORT_VALIDATION"}
  url=a.base_url.rstrip("/")+"/api/validations"
- print(f"Terminal virtuel → {url}\neventId={eid}, cardUid={uid}, mode={a.mode}")
+ print(f"Terminal Janus virtuel → {url}\neventId={eid}, cardUid={uid}, mode={a.mode}")
  status=post(url,token,payload)
  if status is not None and a.mode=="replay":
   print("\nRejeu exact :");post(url,token,payload)

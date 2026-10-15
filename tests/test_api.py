@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import json, os, unittest, urllib.request, urllib.error, uuid
 from datetime import datetime, timezone
-BASE=os.environ.get("RFID_BASE_URL","http://localhost:5080")
+BASE=os.environ.get("JANUS_BASE_URL",os.environ.get("RFID_BASE_URL","http://localhost:5080"))
 TOKEN=os.environ.get("TERMINAL_DEMO_TOKEN","dev-terminal-token-change-me")
 def call(path,method="GET",payload=None,token=TOKEN):
  h={}
@@ -20,7 +20,7 @@ def event(uid="04A1B2C3D4E5F6"):
  return {"eventId":str(uuid.uuid4()),"cardUid":uid,"occurredAt":datetime.now(timezone.utc).isoformat(),"eventType":"TRANSPORT_VALIDATION"}
 class ApiTests(unittest.TestCase):
  def test_health(self):
-  s,b=call("/health");self.assertEqual(s,200);self.assertEqual(b["status"],"healthy")
+  s,b=call("/health");self.assertEqual(s,200);self.assertEqual(b["status"],"healthy");self.assertEqual(b["service"],"janus-api")
  def test_active_card(self):
   s,b=call("/api/validations","POST",event());self.assertEqual(s,200);self.assertEqual(b["decision"],"ACCEPTED");self.assertFalse(b["duplicate"])
  def test_exact_replay(self):
