@@ -1,0 +1,341 @@
+<div class="simulator-view">
+  <!-- Avertissement réglementaire & banc d'essai -->
+  <div class="disclaimer-alert">
+    <div class="alert-icon" aria-hidden="true">ℹ️</div>
+    <div class="alert-body">
+      <strong>Banc d'essai logiciel pour démonstration :</strong>
+      <span> Cette interface émule le comportement d'un valideur de transport physique (ISO/IEC 14443 NFC) connecté à l'API Janus Kestrel.</span>
+    </div>
+    <div class="kiosk-specs">
+      <span class="spec-badge">ID: TERMINAL-DEMO-01</span>
+      <span class="spec-badge">Tarif: 1,500 TND</span>
+    </div>
+  </div>
+
+  <div class="simulator-layout">
+    <!-- VALIDEUR VIRTUEL PROFESSIONNEL -->
+    <section class="kiosk-column" aria-label="Valideur RFID">
+      <div class="kiosk-device">
+        <!-- En-tête du valideur avec voyants lumineux -->
+        <div class="kiosk-head">
+          <div class="kiosk-brand">
+            <span class="kiosk-model">JANUS-VALIDATOR</span>
+            <span class="kiosk-series">Série V-100</span>
+          </div>
+          <div class="kiosk-indicators" aria-label="Voyants d'état">
+            <div class="indicator-lamp green" [class.on]="currentResult()?.decision === 'ACCEPTED'" title="Titre accepté"></div>
+            <div class="indicator-lamp red" [class.on]="currentResult()?.decision === 'REJECTED' || currentError() !== null" title="Titre refusé"></div>
+            <div class="indicator-lamp amber" [class.on]="currentResult()?.duplicate" title="Rejeu d'idempotence"></div>
+          </div>
+        </div>
+
+        <!-- AFFICHEUR DU VALIDEUR (ÉCRAN HAUTE LISIBILITÉ) -->
+        <div class="kiosk-screen" [ngClass]="{
+          'screen-accepted': currentResult()?.decision === 'ACCEPTED' && !currentResult()?.duplicate,
+          'screen-duplicate': currentResult()?.duplicate,
+          'screen-rejected': currentResult()?.decision === 'REJECTED',
+          'screen-conflict': currentError()?.status === 409,
+          'screen-unauthorized': currentError()?.status === 401,
+          'screen-loading': isProcessing()
+        }">
+          @if (isProcessing()) {
+            <div class="screen-content">
+              <div class="loading-ring" aria-label="Traitement en cours"></div>
+              <div class="screen-primary">LECTURE EN COURS</div>
+              <div class="screen-secondary">Communication sécurisée avec l'API...</div>
+            </div>
+          } @else if (currentResult()) {
+            @if (currentResult()!.decision === 'ACCEPTED') {
+              <div class="screen-content">
+                @if (currentResult()!.duplicate) {
+                  <span class="state-symbol amber" aria-hidden="true">🔁</span>
+                  <div class="screen-primary">TITRE DÉJÀ VALIDÉ</div>
+                  <div class="screen-secondary">Rejeu détecté (Idempotence) : Aucun second débit</div>
+                  <div class="financial-summary">
+                    <div class="fin-col">
+                      <span class="fin-label">Débit appliqué</span>
+                      <span class="fin-val debit">0 TND (Idempotent)</span>
+                    </div>
+                    <div class="fin-divider"></div>
+                    <div class="fin-col">
+                      <span class="fin-label">Solde carte</span>
+                      <span class="fin-val balance">Inchangé</span>
+                    </div>
+                  </div>
+                } @else {
+                  <span class="state-symbol green" aria-hidden="true">✔</span>
+                  <div class="screen-primary">TITRE ACCEPTÉ</div>
+                  <div class="screen-secondary">Bon voyage sur le réseau</div>
+                  <div class="financial-summary">
+                    <div class="fin-col">
+                      <span class="fin-label">Tarif débité</span>
+                      <span class="fin-val debit">{{ currentResult()!.amountDebited | millimes }}</span>
+                    </div>
+                    <div class="fin-divider"></div>
+                    <div class="fin-col">
+                      <span class="fin-label">Nouveau solde</span>
+                      <span class="fin-val balance">{{ currentResult()!.balanceMillimes | millimes }}</span>
+                    </div>
+                  </div>
+                }
+              </div>
+            } @else {
+              <div class="screen-content">
+                <span class="state-symbol red" aria-hidden="true">✖</span>
+                <div class="screen-primary">PASSAGE REFUSÉ</div>
+                <div class="screen-reason">
+                  @switch (currentResult()!.reason) {
+                    @case ('INSUFFICIENT_FUNDS') { Solde insuffisant pour ce trajet }
+                    @case ('CARD_REVOKED') { Carte révoquée / mise en opposition }
+                    @case ('UNKNOWN_CARD') { Carte inconnue au registre }
+                    @default { {{ currentResult()!.reason }} }
+                  }
+                </div>
+                @if (currentResult()!.balanceMillimes !== undefined) {
+                  <div class="screen-secondary">Solde disponible : {{ currentResult()!.balanceMillimes | millimes }}</div>
+                }
+              </div>
+            }
+          } @else if (currentError()) {
+            <div class="screen-content">
+              <span class="state-symbol red" aria-hidden="true">⚠</span>
+              <div class="screen-primary">
+                @if (currentError()!.status === 409) { CONFLIT D'INTÉGRITÉ (409) }
+                @else if (currentError()!.status === 401) { ACCÈS REFUSÉ (401) }
+                @else { ERREUR SYSTÈME ({{ currentError()!.status }}) }
+              </div>
+              <div class="screen-secondary">{{ currentError()!.message }}</div>
+            </div>
+          } @else {
+            <div class="screen-content idle">
+              <span class="nfc-target-icon" aria-hidden="true">📶</span>
+              <div class="screen-primary">PRÉSENTEZ VOTRE TITRE</div>
+              <div class="screen-secondary">Sans contact RFID / NFC</div>
+            </div>
+          }
+        </div>
+
+        <!-- ZONE DE CONTACT RFID SANS CONTACT -->
+        <button type="button" class="touch-target" (click)="simulateValidation()" [disabled]="isProcessing() || !effectiveUid">
+          <span class="target-symbol" aria-hidden="true">💳</span>
+          <span class="target-title">Badger sur la cible</span>
+          <span class="target-uid">Support : <strong>{{ effectiveUid || 'Aucun' }}</strong></span>
+        </button>
+
+        <!-- Pied d'informations techniques du valideur -->
+        <div class="kiosk-foot">
+          <span>Latence API : <strong>{{ lastDurationMs() }} ms</strong></span>
+          <span>Jeton borne : <strong [ngClass]="session.hasTerminalAuth() ? 'text-success' : 'text-danger'">{{ session.hasTerminalAuth() ? 'Actif' : 'Non fourni' }}</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- COLONNE CONTRÔLES D'EXPLOITATION -->
+    <div class="operations-column">
+      <!-- 1. Sélection de la carte -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h2>1. Sélection du support de transport</h2>
+          <button type="button" class="btn btn-secondary" (click)="loadDemoCards()" [disabled]="loadingCards()" title="Actualiser la liste">
+            🔄 Actualiser
+          </button>
+        </div>
+
+        <div class="card-panel-body">
+          <div class="mode-selector">
+            <label class="radio-label">
+              <input type="radio" [value]="false" [(ngModel)]="useCustomUid" />
+              <span>Cartes de démonstration enregistrées</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" [value]="true" [(ngModel)]="useCustomUid" />
+              <span>UID personnalisé / Carte inconnue</span>
+            </label>
+          </div>
+
+          @if (!useCustomUid) {
+            <div class="cards-grid">
+              @for (card of demoCards(); track card.uid) {
+                <div class="card-choice"
+                     [class.selected]="selectedUid === card.uid"
+                     (click)="selectedUid = card.uid; onCardChange()">
+                  <div class="card-choice-head">
+                    <span class="card-choice-uid">{{ card.uid }}</span>
+                    <app-badge [value]="card.status"></app-badge>
+                  </div>
+                  <div class="card-choice-desc">{{ card.label }}</div>
+                  <div class="card-choice-balance">
+                    Solde : <strong>{{ card.balanceMillimes | millimes }}</strong>
+                  </div>
+                </div>
+              }
+            </div>
+          } @else {
+            <div class="custom-input-box">
+              <label class="form-label" for="customUidField">Identifiant UID (Hexadécimal) :</label>
+              <input
+                id="customUidField"
+                type="text"
+                class="form-input"
+                placeholder="Ex: 04DEADBEEF0001"
+                [(ngModel)]="customUid"
+                maxlength="64"
+              />
+              <span class="field-hint">Utile pour tester le refus pour carte inexistante (<code>UNKNOWN_CARD</code>).</span>
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- 2. Actions & Scénarios de test -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h2>2. Scénarios de validation opérationnelle</h2>
+        </div>
+
+        <div class="card-panel-body">
+          <div class="actions-grid">
+            <button type="button" class="action-card primary" (click)="simulateValidation()" [disabled]="isProcessing() || !effectiveUid">
+              <div class="action-icon">🎯</div>
+              <div class="action-text">
+                <strong>Validation normale</strong>
+                <small>Crée un <code>eventId</code> unique et débite le tarif (1,500 TND)</small>
+              </div>
+            </button>
+
+            <button type="button" class="action-card warning" (click)="simulateDuplicate()" [disabled]="isProcessing() || !lastRequestSent()">
+              <div class="action-icon">🔁</div>
+              <div class="action-text">
+                <strong>Test de rejeu (Idempotence)</strong>
+                <small>Renvoie le même <code>eventId</code> : <code>duplicate=true</code> sans débit</small>
+              </div>
+            </button>
+
+            <button type="button" class="action-card purple" (click)="simulateConflict()" [disabled]="isProcessing() || !lastRequestSent()">
+              <div class="action-icon">⚡</div>
+              <div class="action-text">
+                <strong>Conflit d'intégrité</strong>
+                <small>Même <code>eventId</code> avec payload altéré : rejet 409 Conflict</small>
+              </div>
+            </button>
+
+            <button type="button" class="action-card danger" (click)="simulateUnauthorized()" [disabled]="isProcessing()">
+              <div class="action-icon">🛡️</div>
+              <div class="action-text">
+                <strong>Contrôle de sécurité sans jeton</strong>
+                <small>Omet le jeton de borne : rejet 401 Unauthorized par l'API</small>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Inspecteur de données techniques (Dernière requête) -->
+      @if (lastRequestSent()) {
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <h2>3. Données techniques de la transaction</h2>
+          </div>
+          <div class="card-panel-body">
+            <div class="json-inspector">
+              <div class="json-pane">
+                <span class="pane-title">Requête envoyée (POST /api/validations)</span>
+                <pre><code>{{ lastRequestSent() | json }}</code></pre>
+              </div>
+              <div class="json-pane">
+                <span class="pane-title">
+                  @if (currentResult()) { Réponse reçue (200 OK) }
+                  @else if (currentError()) { Erreur reçue ({{ currentError()!.status }}) }
+                </span>
+                <pre><code>{{ (currentResult() || currentError()) | json }}</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- JOURNAL DES VALIDATIONS EN MÉMOIRE DE SESSION -->
+  <section class="card-panel session-log" aria-label="Historique de la session">
+    <div class="card-panel-header">
+      <div class="header-title-wrap">
+        <h2>Historique des validations (Session en cours)</h2>
+        <span class="count-tag">{{ validationSession.count() }} événement(s)</span>
+      </div>
+      @if (validationSession.count() > 0) {
+        <button type="button" class="btn btn-secondary" (click)="validationSession.clear()">Effacer l'historique</button>
+      }
+    </div>
+
+    <div class="card-panel-body">
+      @if (validationSession.count() === 0) {
+        <div class="empty-placeholder">
+          <span class="empty-glyph" aria-hidden="true">⏱️</span>
+          <p>Aucune validation effectuée dans cette session. Sélectionnez une carte et badgez sur le valideur.</p>
+        </div>
+      } @else {
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Horodatage</th>
+                <th scope="col">Scénario</th>
+                <th scope="col">Event ID</th>
+                <th scope="col">UID Carte</th>
+                <th scope="col">Décision</th>
+                <th scope="col">Motif métier</th>
+                <th scope="col">Montant débité</th>
+                <th scope="col">Rejeu</th>
+                <th scope="col">Latence</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (entry of validationSession.entries(); track entry.id) {
+                <tr>
+                  <td>{{ entry.timestamp | date:'HH:mm:ss' }}</td>
+                  <td>
+                    <span class="scenario-pill" [ngClass]="'pill-' + entry.scenario.toLowerCase()">
+                      {{ entry.scenario }}
+                    </span>
+                  </td>
+                  <td><code>{{ entry.request.eventId | slice:0:8 }}...</code></td>
+                  <td><strong>{{ entry.request.cardUid }}</strong></td>
+                  <td>
+                    @if (entry.response) {
+                      <app-badge [value]="entry.response.decision"></app-badge>
+                    } @else if (entry.error) {
+                      <app-badge [value]="'HTTP ' + entry.error.status"></app-badge>
+                    }
+                  </td>
+                  <td>
+                    @if (entry.response) {
+                      <code>{{ entry.response.reason }}</code>
+                    } @else if (entry.error) {
+                      <span class="text-danger">{{ entry.error.message }}</span>
+                    }
+                  </td>
+                  <td>
+                    @if (entry.response?.amountDebited !== undefined) {
+                      {{ entry.response!.amountDebited | millimes }}
+                    } @else {
+                      —
+                    }
+                  </td>
+                  <td>
+                    @if (entry.response?.duplicate) {
+                      <strong class="text-warning">OUI</strong>
+                    } @else {
+                      <span class="text-dim">NON</span>
+                    }
+                  </td>
+                  <td>{{ entry.durationMs }} ms</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </div>
+  </section>
+</div>

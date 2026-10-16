@@ -1,0 +1,271 @@
+<div class="cards-view">
+  <!-- Barre d'outils et de recherche -->
+  <div class="card-panel search-toolbar">
+    <div class="search-inputs">
+      <div class="input-with-icon">
+        <span class="search-glyph" aria-hidden="true">🔍</span>
+        <input
+          type="text"
+          class="form-input search-field"
+          placeholder="Rechercher par UID (ex: 04A1B2...) ou libellé usager..."
+          [ngModel]="searchFilter()"
+          (ngModelChange)="searchFilter.set($event)"
+        />
+      </div>
+
+      <div class="filter-dropdown">
+        <label for="statusFilterSelect" class="sr-only">Filtrer par statut</label>
+        <select
+          id="statusFilterSelect"
+          class="form-select"
+          [ngModel]="statusFilter()"
+          (ngModelChange)="statusFilter.set($event)">
+          <option value="ALL">Tous les statuts</option>
+          <option value="Active">Actives uniquement</option>
+          <option value="Revoked">Révoquées uniquement</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="toolbar-side-actions">
+      <span class="results-count">{{ filteredCards.length }} carte(s) trouvée(s)</span>
+      <button type="button" class="btn btn-secondary" (click)="loadCards()" [disabled]="isLoading()">
+        🔄 Actualiser
+      </button>
+    </div>
+  </div>
+
+  <!-- TABLEAU DES CARTES -->
+  <div class="card-panel">
+    <div class="card-panel-header">
+      <h2>Inventaire des cartes RFID référencées</h2>
+    </div>
+
+    <div class="card-panel-body p-0">
+      @if (isLoading()) {
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Chargement des cartes depuis l'API...</p>
+        </div>
+      } @else if (filteredCards.length === 0) {
+        <div class="empty-state">
+          <span class="empty-glyph" aria-hidden="true">💳</span>
+          <p>Aucune carte ne correspond aux critères de recherche.</p>
+        </div>
+      } @else {
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Identifiant UID</th>
+                <th scope="col">Libellé usager</th>
+                <th scope="col">Solde disponible</th>
+                <th scope="col">Statut</th>
+                <th scope="col" class="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (card of filteredCards; track card.uid) {
+                <tr>
+                  <td>
+                    <code class="uid-tag">{{ card.uid }}</code>
+                  </td>
+                  <td>
+                    <strong class="card-label-text">{{ card.label }}</strong>
+                  </td>
+                  <td>
+                    <span class="balance-amount">{{ card.balanceMillimes | millimes }}</span>
+                  </td>
+                  <td>
+                    <app-badge [value]="card.status"></app-badge>
+                  </td>
+                  <td class="text-right">
+                    <div class="row-actions">
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="openCardDetail(card)">
+                        📜 Historique débits
+                      </button>
+                      <button type="button" class="btn btn-primary btn-sm" (click)="openEditModal(card)">
+                        ⚙️ Gérer / Recharger
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- FICHE DÉTAILLÉE DE CARTE (PANNEAU LATÉRAL / MODALE) -->
+  @if (selectedCardDetail()) {
+    <div class="modal-backdrop" (click)="closeCardDetail()">
+      <div class="modal-dialog modal-lg" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <div>
+            <h3>Fiche détaillée du support RFID</h3>
+            <span class="modal-sub">UID : <code>{{ selectedCardDetail()!.uid }}</code></span>
+          </div>
+          <button type="button" class="close-btn" (click)="closeCardDetail()" aria-label="Fermer">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Résumé carte -->
+          <div class="detail-summary-grid">
+            <div class="summary-box">
+              <span class="sum-label">Libellé</span>
+              <strong class="sum-val">{{ selectedCardDetail()!.label }}</strong>
+            </div>
+            <div class="summary-box">
+              <span class="sum-label">Solde actuel</span>
+              <strong class="sum-val text-primary">{{ selectedCardDetail()!.balanceMillimes | millimes }}</strong>
+            </div>
+            <div class="summary-box">
+              <span class="sum-label">Statut</span>
+              <div class="mt-1"><app-badge [value]="selectedCardDetail()!.status"></app-badge></div>
+            </div>
+            <div class="summary-box">
+              <span class="sum-label">Transactions billettiques</span>
+              <strong class="sum-val">{{ selectedCardDetail()!.transactionsCount }}</strong>
+            </div>
+          </div>
+
+          <!-- Historique des débits -->
+          <div class="transactions-section">
+            <h4>Historique des débits de transport (Table <code>FareTransactions</code>)</h4>
+            @if (isLoadingDetail()) {
+              <div class="loading-state"><p>Chargement des transactions...</p></div>
+            } @else if (selectedCardDetail()!.transactions.length === 0) {
+              <p class="text-muted text-center py-4">Aucune transaction de débit enregistrée pour cette carte.</p>
+            } @else {
+              <div class="table-container max-h-300">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Horodatage</th>
+                      <th>Borne</th>
+                      <th>Montant débité</th>
+                      <th>Solde après</th>
+                      <th>Event ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (tx of selectedCardDetail()!.transactions; track tx.id) {
+                      <tr>
+                        <td>{{ tx.createdAt | date:'dd/MM/yyyy HH:mm:ss' }}</td>
+                        <td><code>{{ tx.terminalId }}</code></td>
+                        <td><strong class="text-danger">-{{ tx.amountMillimes | millimes }}</strong></td>
+                        <td>{{ tx.balanceAfterMillimes | millimes }}</td>
+                        <td><code class="text-dim">{{ tx.eventId | slice:0:8 }}...</code></td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" (click)="closeCardDetail()">Fermer</button>
+          <button type="button" class="btn btn-primary" (click)="openEditModal(selectedCardDetail()!); closeCardDetail()">
+            Modifier / Recharger cette carte
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- MODALE D'ADMINISTRATION (RECHARGE / CHANGEMENT DE STATUT) -->
+  @if (showEditModal()) {
+    <div class="modal-backdrop" (click)="closeEditModal()">
+      <div class="modal-dialog" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <div>
+            <h3>Administration de carte (Mise à jour / Recharge)</h3>
+            <span class="modal-sub">Cible : <code>{{ targetCardUid }}</code></span>
+          </div>
+          <button type="button" class="close-btn" (click)="closeEditModal()" aria-label="Fermer">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="admin-notice">
+            <span class="admin-icon" aria-hidden="true">🛡️</span>
+            <div>
+              <strong>Règle de gouvernance & Traçabilité :</strong>
+              <span> Cette action exécute <code>PUT /api/cards/&#123;uid&#125;</code> (rôle Administrateur requis). Elle effectue un ajustement administratif de solde consigné dans le journal d'audit (<code>CardAuditLog</code>), distinct du registre billettique de transport (<code>FareTransactions</code>).</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cardLabelInput">Libellé de la carte / Usager</label>
+            <input
+              id="cardLabelInput"
+              type="text"
+              class="form-input"
+              [(ngModel)]="editLabel"
+              maxlength="120"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cardBalanceInput">Nouveau solde (en millimes) :</label>
+            <div class="balance-input-row">
+              <input
+                id="cardBalanceInput"
+                type="number"
+                class="form-input"
+                min="0"
+                step="500"
+                [(ngModel)]="editBalanceMillimes"
+              />
+              <span class="balance-preview">{{ editBalanceMillimes | millimes }}</span>
+            </div>
+            <!-- Raccourcis de recharge rapide -->
+            <div class="quick-recharge-btns">
+              <span class="quick-title">Recharge rapide :</span>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(5000)">+ 5,000 TND</button>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(10000)">+ 10,000 TND</button>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(20000)">+ 20,000 TND</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cardStatusSelect">Statut d'exploitation</label>
+            <select id="cardStatusSelect" class="form-select" [(ngModel)]="editStatus">
+              <option value="Active">Active (Autorisée pour transport)</option>
+              <option value="Revoked">Révoquée (Mise en opposition / Bloquée)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cardReasonInput">
+              Motif d'audit administratif <span class="required">*</span>
+            </label>
+            <input
+              id="cardReasonInput"
+              type="text"
+              class="form-input"
+              placeholder="Ex: Recharge guichet 10 TND, Mise en opposition suite perte usager..."
+              [(ngModel)]="editReason"
+              required
+              maxlength="256"
+            />
+            <span class="field-hint">Obligatoire pour conformité avec la table <code>CardAuditLogs</code>.</span>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" (click)="closeEditModal()" [disabled]="isSubmitting()">
+            Annuler
+          </button>
+          <button type="button" class="btn btn-primary" (click)="submitCardUpdate()" [disabled]="isSubmitting() || !editReason.trim()">
+            @if (isSubmitting()) { Enregistrement... }
+            @else { Valider et inscrire à l'audit }
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

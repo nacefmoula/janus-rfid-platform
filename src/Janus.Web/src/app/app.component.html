@@ -1,0 +1,29 @@
+<div class="app-shell">
+  <!-- Barre latérale de navigation -->
+  <app-sidebar></app-sidebar>
+
+  <!-- Zone principale -->
+  <div class="app-main">
+    <app-header></app-header>
+
+    <main class="page-content" id="main-content">
+      <router-outlet></router-outlet>
+    </main>
+
+    <footer class="app-footer">
+      <div class="footer-meta">
+        <span>Janus RFID Platform — Projet de Fin d'Études (PFE)</span>
+        <span class="sep">•</span>
+        <span>Auteur : Nacef Moula (<code>nacef.moula&#64;esprit.tn</code>)</span>
+      </div>
+      <div class="footer-badges">
+        <span class="tech-pill">ASP.NET Core 10</span>
+        <span class="tech-pill">PostgreSQL 18</span>
+        <span class="tech-pill">Angular 19</span>
+        <span class="tech-pill">OpenTelemetry</span>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<app-toast></app-toast>

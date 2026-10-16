@@ -1,0 +1,6 @@
+dist/
+.angular/
+.git/
+.vscode/
+coverage/
+*.log
