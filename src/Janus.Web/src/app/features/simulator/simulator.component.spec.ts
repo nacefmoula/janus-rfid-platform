@@ -105,4 +105,31 @@ describe('SimulatorComponent', () => {
     expect(apiSpy.validate).toHaveBeenCalledTimes(2);
     expect(component.currentResult()?.duplicate).toBeTrue();
   });
+
+  it('devrait afficher la décision REJECTED et le motif PASSBACK_VIOLATION avec montant débité nul', () => {
+    const passbackResult: ValidationResult = {
+      eventId: 'test-passback-uuid',
+      terminalId: 'TERMINAL-DEMO-01',
+      cardUid: '04A1B2C3D4E5F6',
+      decision: 'REJECTED',
+      reason: 'PASSBACK_VIOLATION',
+      balanceMillimes: 8500,
+      amountDebited: 0,
+      duplicate: false,
+      receivedAt: '2026-10-16T10:00:05Z'
+    };
+    apiSpy.validate.and.returnValue(of(passbackResult));
+
+    component.simulateValidation();
+
+    expect(apiSpy.validate).toHaveBeenCalled();
+    expect(component.currentResult()).toEqual(passbackResult);
+    expect(component.currentResult()?.decision).toBe('REJECTED');
+    expect(component.currentResult()?.reason).toBe('PASSBACK_VIOLATION');
+    expect(component.currentResult()?.amountDebited).toBe(0);
+
+    fixture.detectChanges();
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.screen-reason')?.textContent).toContain('Anti-passback : Titre déjà validé récemment');
+  });
 });

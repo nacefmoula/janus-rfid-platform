@@ -201,6 +201,8 @@ namespace Janus.Api.Migrations
                     b.HasIndex("TerminalId", "EventId")
                         .IsUnique();
 
+                    b.HasIndex("TerminalId", "CardUid", "Decision", "ReceivedAt");
+
                     b.ToTable("Validations");
                 });
 

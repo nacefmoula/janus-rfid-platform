@@ -62,6 +62,7 @@ public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbC
         b.Entity<ValidationEvent>(e => {
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.TerminalId, x.EventId }).IsUnique();
+            e.HasIndex(x => new { x.TerminalId, x.CardUid, x.Decision, x.ReceivedAt });
             e.Property(x => x.TerminalId).HasMaxLength(80).IsRequired();
             e.Property(x => x.CardUid).HasMaxLength(64).IsRequired();
             e.Property(x => x.PayloadHash).HasMaxLength(64).IsRequired();

@@ -102,15 +102,27 @@ python3 simulator/janus_simulator.py --mode bad-token
 
 ## 5. Tests Automatiques & Observabilité
 
-### Exécuter la suite complète de 27 tests d'intégration
+### A. Tests d'intégration et de concurrence .NET 10 (xUnit + PostgreSQL)
+```bash
+dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj
+```
+Exécute 14 tests déterministes pilotés par `SimulatedTimeProvider` sous PostgreSQL réel : fenêtre temporelle anti-passback, concurrence réelle pessimiste (`FOR UPDATE`), rejeux idempotents prioritaires, cartes révoquées, solde insuffisant et multi-bornes.
+
+### B. Suite complète de 31 tests d'intégration HTTP (Python)
 ```bash
 python3 tests/test_api.py
 ```
-Couvre l'ensemble des cas limites : concurrence pessimiste sous charge, transactions concurrentes avec solde partagé, pagination des historiques, conservation des statuts d'audit et contrôles d'accès RBAC.
+Couvre l'ensemble des flux API : concurrence pessimiste sous charge, transactions concurrentes avec solde partagé, pagination des historiques, conservation des statuts d'audit, contrôles d'accès RBAC et règles d'anti-passback.
 
-### Vérifier l'ingestion des métriques Prometheus
+### C. Tests unitaires frontend Angular
 ```bash
-# Vérifie en direct que Prometheus collecte les séries attendues (ACCEPTED, REJECTED, CONFLICT)
+cd src/Janus.Web && npm test -- --watch=false
+```
+Exécute 36 tests unitaires Karma / Headless Chrome validant les composants, services, simulateur et affichage de l'anti-passback.
+
+### D. Vérifier l'ingestion des métriques Prometheus
+```bash
+# Vérifie en direct que Prometheus collecte les séries attendues (ACCEPTED, REJECTED, CONFLICT, PASSBACK_VIOLATION)
 python3 tests/verify_metrics.py
 
 # Exécuter les auto-tests unitaires du vérificateur d'observabilité
@@ -141,7 +153,8 @@ Accédez à **`http://localhost:3000`** :
 ## 7. Règles DevSecOps & Maîtrise de la Cardinalité
 
 * **Zéro fuite d'UID dans les métriques :** Pour respecter le RGPD et prévenir toute explosion de cardinalité (*cardinality bomb*) dans les séries temporelles de Prometheus, aucun identifiant de carte (`cardUid`), jeton ou horodatage brut n'est injecté comme label de métrique.
-* **Labels strictement finis :** Seules les dimensions `decision` (`ACCEPTED`, `REJECTED`, `CONFLICT`), `reason` (`ACTIVE_CARD`, `INSUFFICIENT_FUNDS`, etc.), `duplicate` (`true`, `false`) et `terminal_id` sont exposées.
+* **Labels strictement finis :** Seules les dimensions `decision` (`ACCEPTED`, `REJECTED`, `CONFLICT`), `reason` (`ACTIVE_CARD`, `INSUFFICIENT_FUNDS`, `PASSBACK_VIOLATION`, etc.), `duplicate` (`true`, `false`) et `terminal_id` sont exposées.
+* **Règle Anti-Passback configurable :** Empêche le passage successif frauduleux d'un même titre sur un même terminal dans une fenêtre glissante (30s par défaut, paramétrable via `ANTIPASSBACK_WINDOW_SECONDS` ou désactivable via `ANTIPASSBACK_ENABLED`). L'évaluation s'exécute sous verrou pessimiste SQL (`FOR UPDATE`) basé exclusivement sur l'horloge serveur (`ReceivedAt`), préservant strictement l'idempotence préalable. Tout refus `PASSBACK_VIOLATION` est sans débit financier.
 * **Audit administratif isolé :** Les traces nominatives d'audit sont stockées en base relationnelle protégée et accessibles uniquement par le personnel habilité via l'endpoint sécurisé `/api/cards/{uid}/audit`.
 
 ---

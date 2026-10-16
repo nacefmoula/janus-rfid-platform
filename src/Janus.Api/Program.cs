@@ -9,6 +9,18 @@ using Janus.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<JanusDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("JanusDb")));
+builder.Services.AddSingleton(TimeProvider.System);
+
+// Validation centralisée de la configuration au démarrage
+var startupFareConfig = builder.Configuration["Fare:AmountMillimes"];
+if (!string.IsNullOrEmpty(startupFareConfig) && (!int.TryParse(startupFareConfig, out var startupFare) || startupFare <= 0))
+    throw new InvalidOperationException($"Invalid Fare:AmountMillimes '{startupFareConfig}'. Must be a strictly positive integer.");
+
+var startupApbWindow = builder.Configuration["AntiPassback:WindowSeconds"];
+if (!string.IsNullOrEmpty(startupApbWindow)) {
+    if (!int.TryParse(startupApbWindow, out var startupWindow) || startupWindow <= 0)
+        throw new InvalidOperationException($"Invalid AntiPassback:WindowSeconds '{startupApbWindow}'. Must be a strictly positive integer.");
+}
 
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("janus-api", serviceVersion: "1.0.0"))
@@ -272,14 +284,20 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
     }
 });
 
-app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest http, IConfiguration config, JanusDbContext db, ILogger<Program> logger) => {
+app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest http, IConfiguration config, JanusDbContext db, TimeProvider timeProvider, ILogger<Program> logger) => {
     var expected = config["TerminalAuth:DemoToken"];
     var supplied = ExtractBearer(http);
-    if (string.IsNullOrEmpty(expected) || !CheckToken(supplied, expected))
-        return Results.Json(new { error = "unauthorized", message = "Terminal credential missing or invalid." }, statusCode: 401);
 
-    const string terminalId = "TERMINAL-DEMO-01";
+    string terminalId = "TERMINAL-DEMO-01";
+    var term2Token = config["TerminalAuth:Terminal2Token"];
+    if (!string.IsNullOrEmpty(term2Token) && CheckToken(supplied, term2Token)) {
+        terminalId = "TERMINAL-DEMO-02";
+    } else if (string.IsNullOrEmpty(expected) || !CheckToken(supplied, expected)) {
+        return Results.Json(new { error = "unauthorized", message = "Terminal credential missing or invalid." }, statusCode: 401);
+    }
+
     var validationStartTime = Stopwatch.GetTimestamp();
+    var serverNow = timeProvider.GetUtcNow();
 
     if (request.EventId == Guid.Empty || string.IsNullOrWhiteSpace(request.CardUid) || request.CardUid.Length > 64 || request.EventType != "TRANSPORT_VALIDATION") {
         var elapsedBadReqSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
@@ -296,6 +314,13 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
     var fareConfig = config["Fare:AmountMillimes"];
     if (!int.TryParse(fareConfig, out var fareAmount) || fareAmount <= 0)
         return Results.Json(new { error = "invalid_fare_configuration", message = "Fare amount must be configured and strictly positive." }, statusCode: 500);
+
+    var apbEnabledConfig = config["AntiPassback:Enabled"];
+    bool isApbEnabled = !string.Equals(apbEnabledConfig, "false", StringComparison.OrdinalIgnoreCase);
+    int apbWindowSeconds = 30;
+    if (int.TryParse(config["AntiPassback:WindowSeconds"], out var parsedWindow) && parsedWindow > 0) {
+        apbWindowSeconds = parsedWindow;
+    }
 
     var uid = request.CardUid.Trim().ToUpperInvariant();
     var canonical = JsonSerializer.Serialize(new { eventId = request.EventId, cardUid = uid, occurredAt = request.OccurredAt?.ToUniversalTime(), eventType = request.EventType });
@@ -346,22 +371,37 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
         } else if (card.Status == CardStatus.Revoked) {
             decision = ValidationDecision.Rejected;
             reason = "CARD_REVOKED";
-        } else if (card.BalanceMillimes < fareAmount) {
-            decision = ValidationDecision.Rejected;
-            reason = "INSUFFICIENT_FUNDS";
         } else {
-            card.BalanceMillimes -= fareAmount;
-            decision = ValidationDecision.Accepted;
-            reason = "ACTIVE_CARD";
-            db.FareTransactions.Add(new FareTransaction {
-                CardId = card.Id,
-                CardUid = card.Uid,
-                TerminalId = terminalId,
-                EventId = request.EventId,
-                AmountMillimes = fareAmount,
-                BalanceAfterMillimes = card.BalanceMillimes,
-                CreatedAt = DateTimeOffset.UtcNow
-            });
+            bool isPassback = false;
+            if (isApbEnabled) {
+                var cutoff = serverNow - TimeSpan.FromSeconds(apbWindowSeconds);
+                isPassback = await db.Validations.AnyAsync(v =>
+                    v.TerminalId == terminalId &&
+                    v.CardUid == uid &&
+                    v.Decision == ValidationDecision.Accepted &&
+                    v.ReceivedAt >= cutoff);
+            }
+
+            if (isPassback) {
+                decision = ValidationDecision.Rejected;
+                reason = "PASSBACK_VIOLATION";
+            } else if (card.BalanceMillimes < fareAmount) {
+                decision = ValidationDecision.Rejected;
+                reason = "INSUFFICIENT_FUNDS";
+            } else {
+                card.BalanceMillimes -= fareAmount;
+                decision = ValidationDecision.Accepted;
+                reason = "ACTIVE_CARD";
+                db.FareTransactions.Add(new FareTransaction {
+                    CardId = card.Id,
+                    CardUid = card.Uid,
+                    TerminalId = terminalId,
+                    EventId = request.EventId,
+                    AmountMillimes = fareAmount,
+                    BalanceAfterMillimes = card.BalanceMillimes,
+                    CreatedAt = serverNow
+                });
+            }
         }
 
         var record = new ValidationEvent {
@@ -373,7 +413,7 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
             Decision = decision,
             Reason = reason,
             OccurredAt = request.OccurredAt?.ToUniversalTime(),
-            ReceivedAt = DateTimeOffset.UtcNow
+            ReceivedAt = serverNow
         };
         db.Validations.Add(record);
 

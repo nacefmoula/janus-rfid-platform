@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 BASE = os.environ.get("JANUS_BASE_URL", "http://localhost:5080")
 TERMINAL_TOKEN = os.environ.get("TERMINAL_DEMO_TOKEN", "dev-terminal-token-change-me")
+TERMINAL_02_TOKEN = os.environ.get("TERMINAL_02_TOKEN", "dev-terminal-02-token-change-me")
 ADMIN_TOKEN = os.environ.get("ADMIN_DEMO_TOKEN", "dev-admin-token-change-me")
 
 def http_call(path, method="GET", payload=None, token=None):
@@ -56,6 +57,7 @@ def main():
     card_uid = f"04DEMO{uuid.uuid4().hex[:8].upper()}"
     revoked_uid = f"04REVOKED{uuid.uuid4().hex[:6].upper()}"
     event_id_1 = str(uuid.uuid4())
+    event_id_apb = str(uuid.uuid4())
     event_id_2 = str(uuid.uuid4())
     event_id_3 = str(uuid.uuid4())
 
@@ -73,7 +75,15 @@ def main():
     print(f"HTTP {status} : {json.dumps(body, indent=2)}")
     assert status == 200, "Échec création carte"
 
-    # Provisionnement d'une carte révoquée pour le test de refus
+    # Provisionnement d'une carte à solde insuffisant et d'une carte révoquée pour les tests de refus
+    empty_uid = f"04EMPTY{uuid.uuid4().hex[:7].upper()}"
+    http_call(f"/api/cards/{empty_uid}", method="PUT", payload={
+        "balanceMillimes": 500,
+        "status": "Active",
+        "label": "Carte solde insuffisant démo",
+        "reason": "Test solde inférieur au tarif unitaire"
+    }, token=ADMIN_TOKEN)
+
     http_call(f"/api/cards/{revoked_uid}", method="PUT", payload={
         "balanceMillimes": 5000,
         "status": "Revoked",
@@ -106,34 +116,50 @@ def main():
     print("✔ Détection d'idempotence réussie : duplicate=True, AUCUN débit financier supplémentaire n'a été appliqué.")
 
     # ---------------------------------------------------------
-    step("ÉTAPE 4 : Deuxième passage RFID — Épuisement du solde")
+    step("ÉTAPE 4 : Règle Anti-Passback — Tentative de repassage immédiat sur la même borne")
     # ---------------------------------------------------------
-    print(f"Second passage valide avec un nouvel événement (EventId: {event_id_2}).")
+    print(f"Tentative de repassage immédiat de la même carte sur TERMINAL-DEMO-01 (EventId: {event_id_apb}).")
+    val_payload_apb = {
+        "eventId": event_id_apb,
+        "cardUid": card_uid,
+        "occurredAt": datetime.now(timezone.utc).isoformat(),
+        "eventType": "TRANSPORT_VALIDATION"
+    }
+    status, body = http_call("/api/validations", method="POST", payload=val_payload_apb, token=TERMINAL_TOKEN)
+    print(f"HTTP {status} : {json.dumps(body, indent=2)}")
+    assert status == 200 and body["decision"] == "REJECTED" and body["reason"] == "PASSBACK_VIOLATION", "Échec anti-passback"
+    assert body["amountDebited"] == 0 and body["balanceMillimes"] == 1500, "Échec préservation solde anti-passback"
+    print("✔ Anti-Passback activé : PASSBACK_VIOLATION. Aucun débit financier, solde préservé à 1500 millimes.")
+
+    # ---------------------------------------------------------
+    step("ÉTAPE 5 : Validation sur une autre borne (TERMINAL-DEMO-02) — Épuisement du solde")
+    # ---------------------------------------------------------
+    print(f"Validation légitime sur TERMINAL-DEMO-02 (EventId: {event_id_2}).")
     val_payload_2 = {
         "eventId": event_id_2,
         "cardUid": card_uid,
         "occurredAt": datetime.now(timezone.utc).isoformat(),
         "eventType": "TRANSPORT_VALIDATION"
     }
-    status, body = http_call("/api/validations", method="POST", payload=val_payload_2, token=TERMINAL_TOKEN)
+    status, body = http_call("/api/validations", method="POST", payload=val_payload_2, token=TERMINAL_02_TOKEN)
     print(f"HTTP {status} : {json.dumps(body, indent=2)}")
-    assert status == 200 and body["balanceMillimes"] == 0, "Échec deuxième débit"
-    print(f"✔ Décision : {body['decision']} | Nouveau solde : {body['balanceMillimes']} millimes (solde épuisé).")
+    assert status == 200 and body["decision"] == "ACCEPTED" and body["balanceMillimes"] == 0, "Échec deuxième débit"
+    print(f"✔ Décision : {body['decision']} sur borne {body['terminalId']} | Nouveau solde : {body['balanceMillimes']} millimes (solde épuisé).")
 
     # ---------------------------------------------------------
-    step("ÉTAPE 5 : Cas d'erreur — Solde insuffisant & Carte révoquée")
+    step("ÉTAPE 6 : Cas d'erreur — Solde insuffisant & Carte révoquée")
     # ---------------------------------------------------------
-    print(f"1) Tentative de passage avec solde nul (EventId: {event_id_3}) :")
+    print(f"1) Tentative de passage avec solde insuffisant carte {empty_uid} (EventId: {event_id_3}) :")
     val_payload_3 = {
         "eventId": event_id_3,
-        "cardUid": card_uid,
+        "cardUid": empty_uid,
         "occurredAt": datetime.now(timezone.utc).isoformat(),
         "eventType": "TRANSPORT_VALIDATION"
     }
     status, body = http_call("/api/validations", method="POST", payload=val_payload_3, token=TERMINAL_TOKEN)
     print(f"HTTP {status} : {json.dumps(body, indent=2)}")
     assert status == 200 and body["decision"] == "REJECTED" and body["reason"] == "INSUFFICIENT_FUNDS", "Échec rejet solde"
-    print("✔ Passage rejeté : INSUFFICIENT_FUNDS. Solde préservé à 0 millimes.")
+    print("✔ Passage rejeté : INSUFFICIENT_FUNDS. Solde préservé à 500 millimes.")
 
     print(f"\n2) Tentative de passage avec carte révoquée {revoked_uid} :")
     val_payload_rev = {
@@ -148,7 +174,7 @@ def main():
     print("✔ Passage rejeté : CARD_REVOKED. Aucun débit financier appliqué.")
 
     # ---------------------------------------------------------
-    step("ÉTAPE 6 : Traçabilité et Audit — Contrôle RBAC & Cohérence Ledger")
+    step("ÉTAPE 7 : Traçabilité et Audit — Contrôle RBAC & Cohérence Ledger")
     # ---------------------------------------------------------
     print(f"1) Consultation de la carte par la borne GET /api/cards/{card_uid} (Données billettiques uniquement) :")
     status, body = http_call(f"/api/cards/{card_uid}", token=TERMINAL_TOKEN)
