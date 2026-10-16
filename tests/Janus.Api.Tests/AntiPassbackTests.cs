@@ -23,6 +23,9 @@ public class AntiPassbackTests : IAsyncLifetime
         await _factory.DisposeAsync();
     }
 
+    private string TerminalToken => _factory.TerminalToken;
+    private string Terminal02Token => _factory.Terminal02Token;
+
     private async Task<string> PrepareCardAsync(int balanceMillimes, CardStatus status = CardStatus.Active)
     {
         var uid = "04TEST" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
@@ -39,7 +42,7 @@ public class AntiPassbackTests : IAsyncLifetime
         return uid;
     }
 
-    private HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, DateTimeOffset? occurredAt = null, string token = "dev-terminal-token-change-me")
+    private HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, DateTimeOffset? occurredAt = null, string? token = null)
     {
         var id = eventId ?? Guid.NewGuid();
         var time = occurredAt ?? DateTimeOffset.UtcNow;
@@ -53,7 +56,7 @@ public class AntiPassbackTests : IAsyncLifetime
                 eventType = "TRANSPORT_VALIDATION"
             })
         };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token ?? TerminalToken);
         return req;
     }
 
@@ -127,11 +130,11 @@ public class AntiPassbackTests : IAsyncLifetime
         var uid = await PrepareCardAsync(5000);
 
         // Premier passage sur TERMINAL-DEMO-01
-        var resp1 = await _client.SendAsync(CreateValidationRequest(uid, token: "dev-terminal-token-change-me"));
+        var resp1 = await _client.SendAsync(CreateValidationRequest(uid, token: TerminalToken));
         Assert.Equal(HttpStatusCode.OK, resp1.StatusCode);
 
         // Passage immédiat sur TERMINAL-DEMO-02 avec son jeton dédié
-        var resp2 = await _client.SendAsync(CreateValidationRequest(uid, token: "dev-terminal-02-token-change-me"));
+        var resp2 = await _client.SendAsync(CreateValidationRequest(uid, token: Terminal02Token));
         Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
         var body2 = await resp2.Content.ReadFromJsonAsync<JsonElement>();
 
@@ -218,7 +221,7 @@ public class AntiPassbackTests : IAsyncLifetime
         var resp1 = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/validations")
         {
             Content = JsonContent.Create(new { eventId = Guid.NewGuid(), cardUid = uid, occurredAt = DateTimeOffset.UtcNow, eventType = "TRANSPORT_VALIDATION" }),
-            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", "dev-terminal-token-change-me") }
+            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", disabledFactory.TerminalToken) }
         });
         Assert.Equal(HttpStatusCode.OK, resp1.StatusCode);
 
@@ -226,7 +229,7 @@ public class AntiPassbackTests : IAsyncLifetime
         var resp2 = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/validations")
         {
             Content = JsonContent.Create(new { eventId = Guid.NewGuid(), cardUid = uid, occurredAt = DateTimeOffset.UtcNow, eventType = "TRANSPORT_VALIDATION" }),
-            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", "dev-terminal-token-change-me") }
+            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", disabledFactory.TerminalToken) }
         });
         Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
         var body2 = await resp2.Content.ReadFromJsonAsync<JsonElement>();

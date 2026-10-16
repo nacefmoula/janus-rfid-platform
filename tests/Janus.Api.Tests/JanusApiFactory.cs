@@ -13,6 +13,10 @@ public class JanusApiFactory : WebApplicationFactory<Program>
     public bool AntiPassbackEnabledOverride { get; set; } = true;
     public int AntiPassbackWindowSecondsOverride { get; set; } = 30;
 
+    public string TerminalToken => Environment.GetEnvironmentVariable("TERMINAL_DEMO_TOKEN") ?? "dev-terminal-token-change-me";
+    public string Terminal02Token => Environment.GetEnvironmentVariable("TERMINAL_02_TOKEN") ?? "dev-terminal-02-token-change-me";
+    public string AdminToken => Environment.GetEnvironmentVariable("ADMIN_DEMO_TOKEN") ?? "dev-admin-token-change-me";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((context, config) =>
