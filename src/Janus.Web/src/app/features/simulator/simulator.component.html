@@ -88,6 +88,7 @@
                     @case ('INSUFFICIENT_FUNDS') { Solde insuffisant pour ce trajet }
                     @case ('CARD_REVOKED') { Carte révoquée / mise en opposition }
                     @case ('UNKNOWN_CARD') { Carte inconnue au registre }
+                    @case ('PASSBACK_VIOLATION') { Anti-passback : Titre déjà validé récemment sur cette borne (Veuillez patienter 30s) }
                     @default { {{ currentResult()!.reason }} }
                   }
                 </div>

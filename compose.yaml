@@ -21,6 +21,9 @@ services:
       TerminalAuth__DemoToken: ${TERMINAL_DEMO_TOKEN:-dev-terminal-token-change-me}
       AdminAuth__DemoToken: ${ADMIN_DEMO_TOKEN:-dev-admin-token-change-me}
       Fare__AmountMillimes: ${FARE_AMOUNT_MILLIMES:-1500}
+      AntiPassback__Enabled: ${ANTIPASSBACK_ENABLED:-true}
+      AntiPassback__WindowSeconds: ${ANTIPASSBACK_WINDOW_SECONDS:-30}
+      TerminalAuth__Terminal2Token: ${TERMINAL_02_TOKEN:-dev-terminal-02-token-change-me}
     ports: ["5080:8080"]
     depends_on:
       db:

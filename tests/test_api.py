@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 BASE = os.environ.get("JANUS_BASE_URL", os.environ.get("RFID_BASE_URL", "http://localhost:5080"))
 TERMINAL_TOKEN = os.environ.get("TERMINAL_DEMO_TOKEN", "dev-terminal-token-change-me")
+TERMINAL_02_TOKEN = os.environ.get("TERMINAL_02_TOKEN", "dev-terminal-02-token-change-me")
 ADMIN_TOKEN = os.environ.get("ADMIN_DEMO_TOKEN", "dev-admin-token-change-me")
 
 def call(path, method="GET", payload=None, token=TERMINAL_TOKEN):
@@ -424,9 +425,13 @@ class ApiTests(unittest.TestCase):
         uid = f"04PAGE{uuid.uuid4().hex[:8].upper()}"
         prepare_card(uid, balance_millimes=10000, status="Active")
 
-        # Effectuer deux débits
-        call("/api/validations", "POST", event(uid))
-        call("/api/validations", "POST", event(uid))
+        # Effectuer deux débits sur deux bornes distinctes pour respecter l'anti-passback
+        s_v1, b_v1 = call("/api/validations", "POST", event(uid), token=TERMINAL_TOKEN)
+        self.assertEqual(s_v1, 200)
+        self.assertEqual(b_v1["decision"], "ACCEPTED")
+        s_v2, b_v2 = call("/api/validations", "POST", event(uid), token=TERMINAL_02_TOKEN)
+        self.assertEqual(s_v2, 200)
+        self.assertEqual(b_v2["decision"], "ACCEPTED")
 
         # Requête avec limit=1, offset=0
         s, b = get_card(uid, query="limit=1&offset=0")
@@ -661,6 +666,109 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(b_p2["auditLogs"]), 1)
         self.assertEqual(b_p2["auditLogs"][0]["reason"], "Recharge 1")
         self.assertNotEqual(first_id, b_p2["auditLogs"][0]["id"])
+
+    # --- Tests Anti-Passback ---
+
+    def test_20_anti_passback_same_terminal_rejected(self):
+        """20. Anti-passback : Deux validations successives sur la même borne sont refusées (PASSBACK_VIOLATION), aucun débit supplémentaire."""
+        uid = f"04APB{uuid.uuid4().hex[:8].upper()}"
+        prepare_card(uid, balance_millimes=10000, status="Active")
+
+        # 1er passage : Accepté
+        s1, b1 = call("/api/validations", "POST", event(uid), token=TERMINAL_TOKEN)
+        self.assertEqual(s1, 200)
+        self.assertEqual(b1["decision"], "ACCEPTED")
+        self.assertEqual(b1.get("amountDebited"), 1500)
+        self.assertFalse(b1["duplicate"])
+
+        # 2ème passage immédiat sur la même borne : Refusé pour PASSBACK_VIOLATION
+        s2, b2 = call("/api/validations", "POST", event(uid), token=TERMINAL_TOKEN)
+        self.assertEqual(s2, 200)
+        self.assertEqual(b2["decision"], "REJECTED")
+        self.assertEqual(b2["reason"], "PASSBACK_VIOLATION")
+        self.assertEqual(b2.get("amountDebited", 0), 0)
+        self.assertFalse(b2["duplicate"])
+
+        # Contrôle solde et transactions : exactement 1 débit de 1500 millimes
+        s_card, card = get_card(uid)
+        self.assertEqual(s_card, 200)
+        self.assertEqual(card["balanceMillimes"], 8500)
+        self.assertEqual(card["transactionsCount"], 1)
+
+    def test_21_anti_passback_different_terminal_accepted(self):
+        """21. Anti-passback : Deux validations sur deux bornes distinctes sont autorisées sans blocage local."""
+        uid = f"04APBD{uuid.uuid4().hex[:8].upper()}"
+        prepare_card(uid, balance_millimes=10000, status="Active")
+
+        # 1er passage sur Borne 1 (TERMINAL-DEMO-01)
+        s1, b1 = call("/api/validations", "POST", event(uid), token=TERMINAL_TOKEN)
+        self.assertEqual(s1, 200)
+        self.assertEqual(b1["decision"], "ACCEPTED")
+        self.assertEqual(b1["terminalId"], "TERMINAL-DEMO-01")
+
+        # 2ème passage immédiat sur Borne 2 (TERMINAL-DEMO-02)
+        s2, b2 = call("/api/validations", "POST", event(uid), token=TERMINAL_02_TOKEN)
+        self.assertEqual(s2, 200)
+        self.assertEqual(b2["decision"], "ACCEPTED")
+        self.assertEqual(b2["terminalId"], "TERMINAL-DEMO-02")
+
+        # Contrôle solde et transactions : 2 débits légitimes
+        s_card, card = get_card(uid)
+        self.assertEqual(s_card, 200)
+        self.assertEqual(card["balanceMillimes"], 7000)
+        self.assertEqual(card["transactionsCount"], 2)
+
+    def test_22_anti_passback_idempotent_replay_prevails(self):
+        """22. Priorité de l'idempotence : Un rejeu exact du même événement retourne le résultat idempotent et n'est pas bloqué par l'anti-passback."""
+        uid = f"04APBR{uuid.uuid4().hex[:8].upper()}"
+        prepare_card(uid, balance_millimes=10000, status="Active")
+
+        p = event(uid)
+        # 1er envoi
+        s1, b1 = call("/api/validations", "POST", p, token=TERMINAL_TOKEN)
+        self.assertEqual(s1, 200)
+        self.assertEqual(b1["decision"], "ACCEPTED")
+        self.assertFalse(b1["duplicate"])
+
+        # Rejeu exact du même événement
+        s2, b2 = call("/api/validations", "POST", p, token=TERMINAL_TOKEN)
+        self.assertEqual(s2, 200)
+        self.assertEqual(b2["decision"], "ACCEPTED")
+        self.assertTrue(b2["duplicate"])
+        self.assertEqual(b2["reason"], "ACTIVE_CARD")
+
+        # Contrôle solde et transactions : 1 seul débit
+        s_card, card = get_card(uid)
+        self.assertEqual(s_card, 200)
+        self.assertEqual(card["balanceMillimes"], 8500)
+        self.assertEqual(card["transactionsCount"], 1)
+
+    def test_23_anti_passback_concurrent_requests_single_debit(self):
+        """23. Anti-passback sous concurrence réelle : Deux requêtes distinctes pour la même carte sur la même borne mènent à 1 seul débit et 1 refus PASSBACK_VIOLATION."""
+        uid = f"04APBC{uuid.uuid4().hex[:8].upper()}"
+        prepare_card(uid, balance_millimes=10000, status="Active")
+
+        p1 = event(uid)
+        p2 = event(uid)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(call, "/api/validations", "POST", p1, token=TERMINAL_TOKEN)
+            f2 = executor.submit(call, "/api/validations", "POST", p2, token=TERMINAL_TOKEN)
+            r1 = f1.result()
+            r2 = f2.result()
+
+        decisions = [r1[1]["decision"], r2[1]["decision"]]
+        self.assertIn("ACCEPTED", decisions)
+        self.assertIn("REJECTED", decisions)
+
+        rejected_body = r1[1] if r1[1]["decision"] == "REJECTED" else r2[1]
+        self.assertEqual(rejected_body["reason"], "PASSBACK_VIOLATION")
+
+        # Vérification finale du solde et du nombre de transactions
+        s_card, card = get_card(uid)
+        self.assertEqual(s_card, 200)
+        self.assertEqual(card["balanceMillimes"], 8500)
+        self.assertEqual(card["transactionsCount"], 1)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

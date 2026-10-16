@@ -5,6 +5,7 @@ export type ValidationReason =
   | 'CARD_REVOKED'
   | 'INSUFFICIENT_FUNDS'
   | 'UNKNOWN_CARD'
+  | 'PASSBACK_VIOLATION'
   | 'IDEMPOTENCY_CONFLICT'
   | 'INVALID_REQUEST'
   | string;

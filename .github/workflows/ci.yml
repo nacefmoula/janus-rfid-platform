@@ -28,16 +28,10 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore NuGet dependencies
-        run: dotnet restore src/Janus.Api/Janus.Api.csproj
+        run: dotnet restore
 
-      - name: Compile API in Release configuration
-        run: dotnet build --configuration Release --no-restore src/Janus.Api/Janus.Api.csproj
-
-      - name: Note on .NET unit testing
-        run: |
-          echo "✔ Native .NET build succeeded."
-          echo "ℹ Note: Le projet ne comporte pas de suite de tests unitaires .NET distincte."
-          echo "La validation fonctionnelle complète est assurée par la suite d'intégration HTTP/PostgreSQL (Job 2)."
+      - name: Compile API and Tests in Release configuration
+        run: dotnet build --configuration Release --no-restore
 
   test-and-build-frontend:
     name: 2. Frontend Angular (Tests & Build)
@@ -76,8 +70,11 @@ jobs:
       POSTGRES_USER: janus_ci_user
       POSTGRES_PASSWORD: ci_test_password_secure_99
       TERMINAL_DEMO_TOKEN: ci_terminal_token_secure_99
+      TERMINAL_02_TOKEN: ci_terminal_02_token_secure_99
       ADMIN_DEMO_TOKEN: ci_admin_token_secure_99
       FARE_AMOUNT_MILLIMES: 1500
+      ANTIPASSBACK_ENABLED: "true"
+      ANTIPASSBACK_WINDOW_SECONDS: "30"
       JANUS_BASE_URL: http://localhost:5080
 
     steps:
@@ -162,7 +159,16 @@ jobs:
             exit 1
           fi
 
-      - name: Run 27 Integration Tests (test_api.py)
+      - name: Setup .NET 10 SDK for integration tests
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run .NET 10 Integration & Concurrency Tests (Janus.Api.Tests)
+        run: |
+          dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj --configuration Release --logger "console;verbosity=detailed"
+
+      - name: Run 31 Integration Tests (test_api.py)
         run: |
           python3 tests/test_api.py
 

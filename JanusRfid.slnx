@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Janus.Api/Janus.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Janus.Api.Tests/Janus.Api.Tests.csproj" />
+  </Folder>
+</Solution>
