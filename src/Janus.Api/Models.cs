@@ -58,6 +58,7 @@ public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbC
             e.Property(x => x.Uid).HasMaxLength(64).IsRequired();
             e.Property(x => x.Label).HasMaxLength(120).IsRequired();
             e.Property(x => x.BalanceMillimes).HasDefaultValue(0).IsRequired();
+            e.ToTable(t => t.HasCheckConstraint("CK_Cards_BalanceMillimes_NonNegative", "\"BalanceMillimes\" >= 0"));
         });
         b.Entity<ValidationEvent>(e => {
             e.HasKey(x => x.Id);

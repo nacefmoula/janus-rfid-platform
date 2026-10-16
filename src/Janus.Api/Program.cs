@@ -216,25 +216,26 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
     }
 
     var normalized = uid.Trim().ToUpperInvariant();
-    var card = await db.Cards.SingleOrDefaultAsync(c => c.Uid == normalized);
-    var prevBalance = card?.BalanceMillimes;
-    var prevStatus = card?.Status.ToString();
-    var action = card is null ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED";
-
-    // 4. Détermination du statut effectif :
-    // - Pour une nouvelle carte : Active par défaut si aucun statut n'est fourni.
-    // - Pour une carte existante : conserve son statut actuel si aucun statut n'est fourni.
-    CardStatus targetStatus = card is null
-        ? (requestedStatus ?? CardStatus.Active)
-        : (requestedStatus ?? card.Status);
-
-    // 5. Motif d'audit distinct du libellé de la carte
-    var auditReason = !string.IsNullOrWhiteSpace(request.Reason)
-        ? request.Reason.Trim()
-        : (card is null ? "Initial card provisioning" : "Admin balance/status update");
 
     await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
     try {
+        var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {normalized} FOR UPDATE").SingleOrDefaultAsync();
+        var prevBalance = card?.BalanceMillimes;
+        var prevStatus = card?.Status.ToString();
+        var action = card is null ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED";
+
+        // 4. Détermination du statut effectif :
+        // - Pour une nouvelle carte : Active par défaut si aucun statut n'est fourni.
+        // - Pour une carte existante : conserve son statut actuel si aucun statut n'est fourni.
+        CardStatus targetStatus = card is null
+            ? (requestedStatus ?? CardStatus.Active)
+            : (requestedStatus ?? card.Status);
+
+        // 5. Motif d'audit distinct du libellé de la carte
+        var auditReason = !string.IsNullOrWhiteSpace(request.Reason)
+            ? request.Reason.Trim()
+            : (card is null ? "Initial card provisioning" : "Admin balance/status update");
+
         if (card is null) {
             card = new TransitCard {
                 Uid = normalized,

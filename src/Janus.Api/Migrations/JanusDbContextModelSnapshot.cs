@@ -148,7 +148,10 @@ namespace Janus.Api.Migrations
                     b.HasIndex("Uid")
                         .IsUnique();
 
-                    b.ToTable("Cards");
+                    b.ToTable("Cards", t =>
+                        {
+                            t.HasCheckConstraint("CK_Cards_BalanceMillimes_NonNegative", "\"BalanceMillimes\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("Janus.Api.ValidationEvent", b =>
