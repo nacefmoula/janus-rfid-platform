@@ -171,7 +171,7 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, IConfi
     });
 });
 
-app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, HttpRequest http, IConfiguration config, IHostEnvironment env, JanusDbContext db, ILogger<Program> logger) => {
+app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, HttpRequest http, IConfiguration config, JanusDbContext db, ILogger<Program> logger) => {
     var adminExpected = config["AdminAuth:DemoToken"];
     var terminalExpected = config["TerminalAuth:DemoToken"];
     var supplied = ExtractBearer(http);
@@ -447,3 +447,5 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
 });
 
 app.Run();
+ 
+public partial class Program { }
