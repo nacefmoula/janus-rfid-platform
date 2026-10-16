@@ -55,6 +55,13 @@ services:
     depends_on:
       - prometheus
 
+  web:
+    build: ./src/Janus.Web
+    container_name: janus-web
+    ports: ["${FRONTEND_PORT:-4280}:80"]
+    depends_on:
+      - api
+
 volumes:
   janus_postgres_data:
   janus_prometheus_data:

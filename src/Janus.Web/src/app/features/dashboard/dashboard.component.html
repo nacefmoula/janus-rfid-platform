@@ -1,0 +1,247 @@
+<div class="dashboard-view">
+  <!-- Barre d'actions du dashboard -->
+  <div class="dashboard-toolbar">
+    <div class="toolbar-title">
+      <h2>Vue d'ensemble de l'exploitation</h2>
+      <span class="last-updated">
+        @if (metrics()) {
+          Dernière actualisation télémétrie : {{ metrics()!.scrapedAt | date:'HH:mm:ss' }}
+        }
+      </span>
+    </div>
+    <div class="toolbar-actions">
+      <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+        <span>📈 Ouvrir Grafana</span>
+        <span class="ext-icon">↗</span>
+      </a>
+      <button type="button" class="btn btn-primary" (click)="loadDashboardData()" [disabled]="isLoading()">
+        🔄 Actualiser les données
+      </button>
+    </div>
+  </div>
+
+  <!-- Message d'erreur éventuel -->
+  @if (errorMessage()) {
+    <div class="error-banner">
+      <span class="error-icon" aria-hidden="true">⚠️</span>
+      <div class="error-text">
+        <strong>Avertissement :</strong> {{ errorMessage() }}
+        <span>Vérifiez que le service <code>janus-api</code> est bien démarré sur le port 5080.</span>
+      </div>
+    </div>
+  }
+
+  <!-- Note méthodologique de distinction des sources -->
+  <div class="methodology-note">
+    <span class="note-icon" aria-hidden="true">ℹ️</span>
+    <p>
+      <strong>Distinction des données :</strong> Les compteurs ci-dessous proviennent de l'exporteur de télémétrie Prometheus (OpenTelemetry).
+      Ils mesurent les flux d'ingestion réseau du valideur. Les transactions financières officielles restent persistées de façon immuable dans PostgreSQL (table <code>FareTransactions</code>).
+    </p>
+  </div>
+
+  <!-- GRILLE DES INDICATEURS CLÉS (KPIS) -->
+  <section class="kpi-grid" aria-label="Indicateurs clés">
+    <!-- Total Validations -->
+    <div class="kpi-card">
+      <div class="kpi-head">
+        <span class="kpi-title">TENTATIVES DE PASSAGE</span>
+        <span class="kpi-icon blue">📶</span>
+      </div>
+      <div class="kpi-value">
+        @if (isLoading()) { <span class="skeleton">---</span> }
+        @else { {{ metrics()?.totalValidations || 0 }} }
+      </div>
+      <div class="kpi-footer">
+        <span>Flux global collecté par la borne</span>
+      </div>
+    </div>
+
+    <!-- Validations Acceptées -->
+    <div class="kpi-card border-success">
+      <div class="kpi-head">
+        <span class="kpi-title">VALIDATIONS ACCEPTÉES</span>
+        <span class="kpi-icon green">✔</span>
+      </div>
+      <div class="kpi-value text-success">
+        @if (isLoading()) { <span class="skeleton">---</span> }
+        @else { {{ metrics()?.acceptedValidations || 0 }} }
+      </div>
+      <div class="kpi-footer">
+        <strong class="text-success">{{ acceptanceRate }}%</strong>
+        <span>de taux de succès réseau</span>
+      </div>
+    </div>
+
+    <!-- Validations Refusées -->
+    <div class="kpi-card border-danger">
+      <div class="kpi-head">
+        <span class="kpi-title">REFUS DE VALIDATION</span>
+        <span class="kpi-icon red">✖</span>
+      </div>
+      <div class="kpi-value text-danger">
+        @if (isLoading()) { <span class="skeleton">---</span> }
+        @else { {{ metrics()?.rejectedValidations || 0 }} }
+      </div>
+      <div class="kpi-footer">
+        <span>Solde insuffisant, révoqué ou inconnu</span>
+      </div>
+    </div>
+
+    <!-- Recettes Encaissées -->
+    <div class="kpi-card border-primary">
+      <div class="kpi-head">
+        <span class="kpi-title">RECETTES ESTIMÉES</span>
+        <span class="kpi-icon blue">💰</span>
+      </div>
+      <div class="kpi-value text-primary">
+        @if (isLoading()) { <span class="skeleton">---</span> }
+        @else { {{ metrics()?.totalDebitedMillimes || 0 | millimes }} }
+      </div>
+      <div class="kpi-footer">
+        <span>Basé sur <code>janus_fare_amount_millimes_total</code></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTENU PRINCIPAL EN 2 COLONNES -->
+  <div class="dashboard-main-grid">
+    <!-- COLONNE GAUCHE : ÉTAT DU PARC & SANTÉ SYSTÈME -->
+    <div class="dashboard-col">
+      <!-- Parc des cartes -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h3>💳 État du parc de cartes (Base PostgreSQL)</h3>
+          <a routerLink="/cards" class="header-link">Gérer les cartes →</a>
+        </div>
+        <div class="card-panel-body">
+          <div class="cards-status-stats">
+            <div class="stat-box">
+              <span class="stat-number text-success">{{ activeCardsCount }}</span>
+              <span class="stat-label">Cartes Actives</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-number text-danger">{{ revokedCardsCount }}</span>
+              <span class="stat-label">Cartes Révoquées</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-number text-primary">{{ cards().length }}</span>
+              <span class="stat-label">Total Référencé</span>
+            </div>
+          </div>
+
+          <div class="circulating-balance-bar">
+            <span class="circulating-title">Total des soldes en circulation usagers :</span>
+            <strong class="circulating-val">{{ totalCirculatingBalanceMillimes | millimes }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Santé système & Infrastructure -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h3>⚙️ Infrastructure & Observabilité</h3>
+        </div>
+        <div class="card-panel-body">
+          <div class="system-rows">
+            <div class="system-item">
+              <div class="system-name">
+                <strong>API Janus Kestrel (.NET 10)</strong>
+                <small>Endpoint /health</small>
+              </div>
+              <div class="system-status">
+                <span class="status-indicator" [class.on]="health()?.status === 'healthy'"></span>
+                <span>{{ health()?.status === 'healthy' ? 'Opérationnel' : 'Hors ligne' }}</span>
+              </div>
+            </div>
+
+            <div class="system-item">
+              <div class="system-name">
+                <strong>Collecteur Prometheus 2.54.1</strong>
+                <small>Endpoint /metrics (Scraping toutes les 2s)</small>
+              </div>
+              <div class="system-status">
+                <span class="status-indicator on"></span>
+                <span>Scraping actif</span>
+              </div>
+            </div>
+
+            <div class="system-item">
+              <div class="system-name">
+                <strong>Tableaux de bord Grafana 11.2</strong>
+                <small>Dashboard Janus Observability pré-provisionné</small>
+              </div>
+              <div class="system-status">
+                <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="link-grafana">
+                  Accéder à Grafana ↗
+                </a>
+              </div>
+            </div>
+
+            <div class="system-item">
+              <div class="system-name">
+                <strong>Conflits d'idempotence détectés</strong>
+                <small>Réutilisations non conformes d'EventId</small>
+              </div>
+              <div class="system-status">
+                <strong>{{ metrics()?.conflictValidations || 0 }} conflit(s)</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COLONNE DROITE : DERNIÈRES VALIDATIONS SIMULÉES EN DIRECT -->
+    <div class="dashboard-col">
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h3>⏱️ Dernières validations (Activité en direct)</h3>
+          <a routerLink="/simulator" class="header-link">Simulateur RFID →</a>
+        </div>
+        <div class="card-panel-body">
+          @if (validationSession.count() === 0) {
+            <div class="empty-feed">
+              <span class="empty-feed-icon">📶</span>
+              <p>Aucune validation effectuée dans cette session.</p>
+              <a routerLink="/simulator" class="btn btn-secondary btn-sm">Ouvrir le valideur RFID</a>
+            </div>
+          } @else {
+            <div class="feed-list">
+              @for (entry of validationSession.entries().slice(0, 8); track entry.id) {
+                <div class="feed-item" [ngClass]="{
+                  'feed-accepted': entry.response?.decision === 'ACCEPTED',
+                  'feed-rejected': entry.response?.decision === 'REJECTED',
+                  'feed-error': entry.error !== undefined
+                }">
+                  <div class="feed-badge">
+                    @if (entry.response?.decision === 'ACCEPTED') { ✔ }
+                    @else if (entry.response?.decision === 'REJECTED') { ✖ }
+                    @else { ⚠ }
+                  </div>
+                  <div class="feed-details">
+                    <div class="feed-line-top">
+                      <strong class="feed-uid">{{ entry.request.cardUid }}</strong>
+                      <span class="feed-time">{{ entry.timestamp | date:'HH:mm:ss' }}</span>
+                    </div>
+                    <div class="feed-line-bottom">
+                      @if (entry.response) {
+                        <span class="feed-reason">{{ entry.response.reason }}</span>
+                        @if (entry.response.duplicate) { <span class="duplicate-pill">Rejeu</span> }
+                        @if (entry.response.amountDebited) {
+                          <span class="feed-amount">-{{ entry.response.amountDebited | millimes }}</span>
+                        }
+                      } @else if (entry.error) {
+                        <span class="text-danger">{{ entry.error.message }}</span>
+                      }
+                    </div>
+                  </div>
+                </div>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

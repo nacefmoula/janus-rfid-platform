@@ -39,10 +39,37 @@ jobs:
           echo "ℹ Note: Le projet ne comporte pas de suite de tests unitaires .NET distincte."
           echo "La validation fonctionnelle complète est assurée par la suite d'intégration HTTP/PostgreSQL (Job 2)."
 
-  integration-tests:
-    name: 2. Integration Tests & E2E Validation
+  test-and-build-frontend:
+    name: 2. Frontend Angular (Tests & Build)
     runs-on: ubuntu-latest
-    needs: build-dotnet
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'src/Janus.Web/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: src/Janus.Web
+        run: npm ci
+
+      - name: Run Angular unit tests (Karma / Headless Chrome)
+        working-directory: src/Janus.Web
+        run: npm test -- --watch=false
+
+      - name: Build Angular production bundle
+        working-directory: src/Janus.Web
+        run: npm run build -- --configuration production
+
+  integration-tests:
+    name: 3. Integration Tests & E2E Validation
+    runs-on: ubuntu-latest
+    needs: [build-dotnet, test-and-build-frontend]
 
     env:
       POSTGRES_DB: janus_ci_db
@@ -117,6 +144,24 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Janus Web Demonstrator availability
+        run: |
+          echo "Attente de la disponibilité du frontend Janus Web sur http://localhost:4280..."
+          web_ready=false
+          for i in {1..20}; do
+            if curl -sf "http://localhost:4280" > /dev/null 2>&1; then
+              echo "✔ Frontend Janus Web opérationnel !"
+              web_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$web_ready" != "true" ]; then
+            echo "❌ Le frontend Janus Web n'a pas répondu dans le délai imparti."
+            docker compose logs web
+            exit 1
+          fi
+
       - name: Run 27 Integration Tests (test_api.py)
         run: |
           python3 tests/test_api.py
@@ -141,7 +186,7 @@ jobs:
           docker compose down -v
 
   security-scan:
-    name: 3. Container Security Scan (Trivy DevSecOps)
+    name: 4. Container Security Scan (Trivy DevSecOps)
     runs-on: ubuntu-latest
     needs: integration-tests
 

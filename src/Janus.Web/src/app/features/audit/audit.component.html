@@ -1,0 +1,129 @@
+<div class="audit-view">
+  <!-- Bandeau de gouvernance -->
+  <div class="card-panel audit-header-panel">
+    <div class="header-left-col">
+      <div class="audit-icon-wrap">🛡️</div>
+      <div>
+        <h2>Journal d'audit administratif & Traçabilité immuable</h2>
+        <p class="panel-subtitle">
+          Consignation légale de toutes les créations, recharges et révocations de supports RFID (Table <code>CardAuditLogs</code>).
+        </p>
+      </div>
+    </div>
+    <div class="rbac-status-tag">
+      <span class="tag-label">CONTRÔLE SERVEUR RBAC :</span>
+      <span class="tag-val" [ngClass]="session.hasAdminAuth() ? 'text-success' : 'text-danger'">
+        {{ session.hasAdminAuth() ? 'Jeton Admin configuré' : 'Jeton Admin manquant (403 attendu)' }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Barre de sélection de la carte -->
+  <div class="card-panel select-toolbar">
+    <div class="select-group">
+      <label class="form-label" for="auditCardSelect">Sélectionner la carte à inspecter :</label>
+      <div class="select-row">
+        <select
+          id="auditCardSelect"
+          class="form-select"
+          [ngModel]="selectedUid()"
+          (ngModelChange)="onCardSelected($event)">
+          @for (c of demoCards(); track c.uid) {
+            <option [value]="c.uid">
+              {{ c.uid }} — {{ c.label }} ({{ c.balanceMillimes | millimes }})
+            </option>
+          }
+        </select>
+        <button type="button" class="btn btn-primary" (click)="fetchAuditLogs()" [disabled]="isLoading() || !selectedUid()">
+          Consulter l'audit
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MESSAGE DE REFUS RBAC / AUTHENTIFICATION -->
+  @if (rbacError()) {
+    <div class="rbac-error-card">
+      <div class="error-badge">
+        <span>HTTP {{ rbacError()!.status }}</span>
+      </div>
+      <div class="error-details">
+        <strong>Accès refusé par le serveur API Janus :</strong>
+        <p>{{ rbacError()!.message }}</p>
+        <small>Ce comportement est normal et démontre que la sécurité est appliquée côté backend (l'API rejette les requêtes non autorisées).</small>
+      </div>
+    </div>
+  }
+
+  <!-- TABLEAU DU JOURNAL D'AUDIT -->
+  @if (auditData()) {
+    <div class="card-panel">
+      <div class="card-panel-header">
+        <div class="header-info-wrap">
+          <h3>Piste d'audit de la carte : <code>{{ auditData()!.cardUid }}</code></h3>
+          <span class="count-tag">{{ auditData()!.totalCount }} événement(s) consigné(s)</span>
+        </div>
+      </div>
+
+      <div class="card-panel-body p-0">
+        @if (auditData()!.auditLogs.length === 0) {
+          <div class="empty-state">
+            <span class="empty-glyph" aria-hidden="true">📜</span>
+            <p>Aucun événement d'audit enregistré pour cette carte.</p>
+          </div>
+        } @else {
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Date & Heure (UTC)</th>
+                  <th scope="col">Action effectuée</th>
+                  <th scope="col">Évolution du solde</th>
+                  <th scope="col">Évolution du statut</th>
+                  <th scope="col">Motif administratif déclaré</th>
+                  <th scope="col">Acteur</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (log of auditData()!.auditLogs; track log.id) {
+                  <tr>
+                    <td>{{ log.createdAt | date:'dd/MM/yyyy HH:mm:ss' }}</td>
+                    <td>
+                      <span class="action-tag" [ngClass]="log.action === 'ADMIN_CARD_CREATED' ? 'tag-created' : 'tag-updated'">
+                        {{ log.action }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="diff-box">
+                        @if (log.previousBalanceMillimes !== null) {
+                          <span class="old-val">{{ log.previousBalanceMillimes | millimes }}</span>
+                          <span class="arrow">→</span>
+                        }
+                        <strong class="new-val text-primary">{{ log.newBalanceMillimes | millimes }}</strong>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="diff-box">
+                        @if (log.previousStatus) {
+                          <span class="old-val">{{ log.previousStatus }}</span>
+                          <span class="arrow">→</span>
+                        }
+                        <app-badge [value]="log.newStatus"></app-badge>
+                      </div>
+                    </td>
+                    <td>
+                      <strong class="reason-text">{{ log.reason || 'Non précisé' }}</strong>
+                    </td>
+                    <td>
+                      <code class="actor-code">{{ log.actor }}</code>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>
