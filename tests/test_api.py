@@ -882,18 +882,32 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("balanceMillimes", first)
 
     def test_30_malformed_and_non_bearer_headers_telemetry(self):
-        """30. REV-07 : Les en-têtes Authorization non-Bearer ou Bearer vides sont rejetés (401) et tracés dans janus_security_auth_failures_total."""
+        """30. REV-07 : Les en-têtes Authorization absents, non-Bearer ou Bearer vides sont rejetés (401) et tracés dans janus_security_auth_failures_total."""
+        s_missing, _ = call("/api/cards/04A1B2C3D4E5F6", token=None)
+        self.assertEqual(s_missing, 401)
+
         s_basic, _ = call("/api/cards/04A1B2C3D4E5F6", token=None, custom_headers={"Authorization": "Basic dGVzdDp0ZXN0"})
         self.assertEqual(s_basic, 401)
 
         s_empty, _ = call("/api/cards/04A1B2C3D4E5F6", token=None, custom_headers={"Authorization": "Bearer   "})
         self.assertEqual(s_empty, 401)
 
-        s_met, raw_metrics = call("/metrics", token=SCRAPE_TOKEN)
-        self.assertEqual(s_met, 200)
-        self.assertIn('reason="non_bearer"', raw_metrics)
-        self.assertIn('reason="malformed_header"', raw_metrics)
-        self.assertIn('reason="missing_token"', raw_metrics)
+        expected_reasons = {'reason="missing_token"', 'reason="non_bearer"', 'reason="malformed_header"'}
+        raw_metrics = ""
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            s_met, raw_metrics = call("/metrics", token=SCRAPE_TOKEN)
+            self.assertEqual(s_met, 200)
+            if all(r in raw_metrics for r in expected_reasons):
+                break
+            time.sleep(0.2)
+        else:
+            missing = [r for r in expected_reasons if r not in raw_metrics]
+            self.fail(f"Prometheus metrics timed out waiting for: {missing}. Last raw_metrics extract:\n{raw_metrics[:1500]}")
+
+        self.assertIn("janus_security_auth_failures_total", raw_metrics)
+        for r in expected_reasons:
+            self.assertIn(r, raw_metrics)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
