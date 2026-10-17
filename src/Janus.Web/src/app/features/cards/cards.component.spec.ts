@@ -28,6 +28,16 @@ describe('CardsComponent', () => {
     apiSpy = jasmine.createSpyObj('JanusApiService', ['getDemoCards', 'getSimulatorCards', 'getCard', 'upsertCard']);
     apiSpy.getDemoCards.and.returnValue(of(mockCards));
     apiSpy.getSimulatorCards.and.returnValue(of(mockSimulatorCards));
+    apiSpy.getCard.and.returnValue(of({
+      uid: '04A1B2C3D4E5F6',
+      status: 'Active',
+      label: 'Carte Usager Régulier',
+      balanceMillimes: 10000,
+      transactionsCount: 0,
+      limit: 50,
+      offset: 0,
+      transactions: []
+    }));
 
     await TestBed.configureTestingModule({
       imports: [CardsComponent],
@@ -138,7 +148,65 @@ describe('CardsComponent', () => {
     expect(component.selectedCardDetail()).toEqual(mockDetail);
   });
 
-  it('devrait soumettre la mise à jour d\'une carte avec motif d\'audit obligatoire', () => {
+  it('désactive les boutons d\'administration des cartes et affiche l\'infobulle requise pour un rôle non Admin', () => {
+    fixture.detectChanges();
+
+    const manageBtn: HTMLButtonElement | null = fixture.nativeElement.querySelector('.row-actions .btn-disabled-role');
+    expect(manageBtn).toBeTruthy();
+    expect(manageBtn?.disabled).toBeTrue();
+    expect(manageBtn?.title).toContain('Rôle Administrateur requis');
+    expect(manageBtn?.textContent).toContain('Gérer (Admin requis)');
+
+    // Fiche détaillée
+    component.openCardDetail(mockCards[0]);
+    fixture.detectChanges();
+
+    const modalBtn: HTMLButtonElement | null = fixture.nativeElement.querySelector('.modal-footer .btn-disabled-role');
+    expect(modalBtn).toBeTruthy();
+    expect(modalBtn?.disabled).toBeTrue();
+    expect(modalBtn?.title).toContain('Rôle Administrateur requis');
+    expect(modalBtn?.textContent).toContain('Modifier / Recharger (Admin requis)');
+  });
+
+  it('rejette l\'appel programmatique à openEditModal par un non-Admin et affiche une notification d\'avertissement', () => {
+    expect(component.session.activeRole()).not.toBe('ADMIN');
+
+    component.openEditModal(mockCards[0]);
+
+    expect(component.showEditModal()).toBeFalse();
+    const toasts = notification.toasts();
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].type).toBe('warning');
+    expect(toasts[0].message.toLowerCase()).toContain('administrateur');
+  });
+
+  it('rejette l\'appel programmatique à submitCardUpdate par un non-Admin sans déclencher d\'appel API', () => {
+    expect(component.session.activeRole()).not.toBe('ADMIN');
+    component.targetCardUid = mockCards[0].uid;
+
+    component.submitCardUpdate();
+
+    expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+    const toasts = notification.toasts();
+    expect(toasts.some(t => t.type === 'warning' && t.message.toLowerCase().includes('administrateur'))).toBeTrue();
+  });
+
+  it('active l\'accès complet aux boutons et aux fonctions de modification en mode ADMIN', () => {
+    component.session.setAdminToken('valid-admin-token');
+    fixture.detectChanges();
+
+    const manageBtn: HTMLButtonElement | null = fixture.nativeElement.querySelector('.row-actions .btn-primary');
+    expect(manageBtn).toBeTruthy();
+    expect(manageBtn?.disabled).toBeFalse();
+    expect(manageBtn?.textContent).toContain('Gérer / Recharger');
+
+    component.openEditModal(mockCards[0]);
+    expect(component.showEditModal()).toBeTrue();
+    expect(component.targetCardUid).toBe('04A1B2C3D4E5F6');
+  });
+
+  it('devrait soumettre la mise à jour d\'une carte avec motif d\'audit obligatoire en mode ADMIN', () => {
+    component.session.setAdminToken('valid-admin-token');
     apiSpy.upsertCard.and.returnValue(of({
       uid: '04A1B2C3D4E5F6',
       status: 'Active',
@@ -162,6 +230,7 @@ describe('CardsComponent', () => {
   });
 
   it('6. clearTokens() vide les cartes chargées et ferme les modales de détail et d\'édition', () => {
+    component.session.setAdminToken('valid-admin-token');
     const mockDetail: CardDetail = {
       uid: '04A1B2C3D4E5F6',
       status: 'Active',
@@ -207,6 +276,7 @@ describe('CardsComponent', () => {
   });
 
   it('10. n\'émet pas de toast d\'erreur en doublon depuis le composant lors d\'un échec upsertCard', () => {
+    component.session.setAdminToken('valid-admin-token');
     apiSpy.upsertCard.and.returnValue(throwError(() => ({
       status: 403,
       error: { error: 'Accès refusé' }

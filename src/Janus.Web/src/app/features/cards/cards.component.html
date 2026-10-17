@@ -88,9 +88,15 @@
                       <button type="button" class="btn btn-secondary btn-sm" (click)="openCardDetail(card)">
                         📜 Historique débits
                       </button>
-                      <button type="button" class="btn btn-primary btn-sm" (click)="openEditModal(card)">
-                        ⚙️ Gérer / Recharger
-                      </button>
+                      @if (session.activeRole() === 'ADMIN') {
+                        <button type="button" class="btn btn-primary btn-sm" (click)="openEditModal(card)">
+                          ⚙️ Gérer / Recharger
+                        </button>
+                      } @else {
+                        <button type="button" class="btn btn-secondary btn-sm btn-disabled-role" disabled title="Rôle Administrateur requis pour modifier ou recharger une carte">
+                          🔒 Gérer (Admin requis)
+                        </button>
+                      }
                     </div>
                   </td>
                 </tr>
@@ -173,9 +179,15 @@
 
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" (click)="closeCardDetail()">Fermer</button>
-          <button type="button" class="btn btn-primary" (click)="openEditModal(selectedCardDetail()!); closeCardDetail()">
-            Modifier / Recharger cette carte
-          </button>
+          @if (session.activeRole() === 'ADMIN') {
+            <button type="button" class="btn btn-primary" (click)="openEditModal(selectedCardDetail()!); closeCardDetail()">
+              Modifier / Recharger cette carte
+            </button>
+          } @else {
+            <button type="button" class="btn btn-secondary btn-disabled-role" disabled title="Rôle Administrateur requis pour modifier ou recharger une carte">
+              🔒 Modifier / Recharger (Admin requis)
+            </button>
+          }
         </div>
       </div>
     </div>

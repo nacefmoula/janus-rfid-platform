@@ -47,29 +47,46 @@ describe('DashboardComponent', () => {
     fixture.detectChanges();
   });
 
-  it('devrait créer le composant dashboard et charger la synthèse sans appeler la route AdminOnly getDemoCards', () => {
+  it('devrait créer le composant et ne pas appeler getMetricsSummary en mode ANONYMOUS', () => {
     expect(component).toBeTruthy();
     expect(apiSpy.getHealth).toHaveBeenCalled();
-    expect(apiSpy.getMetricsSummary).toHaveBeenCalled();
+    expect(apiSpy.getMetricsSummary).not.toHaveBeenCalled();
     expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
+    expect(component.isLoading()).toBeFalse();
+    expect(component.metrics()).toBeNull();
+
+    const banner: HTMLElement | null = fixture.nativeElement.querySelector('.anonymous-session-banner');
+    expect(banner).toBeTruthy();
+    expect(banner?.textContent).toContain('Session requise');
   });
 
-  it('devrait calculer correctement le taux d\'acceptation des validations', () => {
+  it('devrait charger les métriques après connexion Terminal et masquer la bannière anonyme', () => {
+    component.session.setTerminalToken('token-borne-123');
+    fixture.detectChanges();
+
+    expect(apiSpy.getMetricsSummary).toHaveBeenCalledTimes(1);
+    expect(component.metrics()).toEqual(mockSummary);
+    expect(component.isLoading()).toBeFalse();
+
+    const banner: HTMLElement | null = fixture.nativeElement.querySelector('.anonymous-session-banner');
+    expect(banner).toBeFalsy();
+  });
+
+  it('devrait calculer fidèlement le taux d\'acceptation et les compteurs lorsque les métriques sont renseignées', () => {
+    component.session.setAdminToken('token-admin-123');
+    fixture.detectChanges();
+
     // 16 / 20 = 80%
     expect(component.acceptanceRate).toBe(80);
-  });
-
-  it('devrait compter fidèlement les cartes actives et révoquées depuis la synthèse', () => {
     expect(component.activeCardsCount).toBe(1);
     expect(component.revokedCardsCount).toBe(1);
     expect(component.totalCardsCount).toBe(2);
     expect(component.totalCirculatingBalanceMillimes).toBe(15000);
   });
 
-  it('6, 7 & 8. rafraîchit automatiquement sur changement de session, purge sur clearTokens() et ignore les réponses tardives', () => {
-    apiSpy.getMetricsSummary.calls.reset();
+  it('devrait purger sur clearTokens() et ignorer les réponses tardives issues d\'une ancienne session', () => {
     component.session.setTerminalToken('token-borne-123');
-    expect(apiSpy.getMetricsSummary).toHaveBeenCalledTimes(1);
+    expect(component.metrics()).not.toBeNull();
 
     const delayedSummary$ = new Subject<PrometheusMetricsSummary>();
     apiSpy.getMetricsSummary.and.returnValue(delayedSummary$.asObservable());
@@ -78,8 +95,11 @@ describe('DashboardComponent', () => {
     expect(component.isLoading()).toBeTrue();
 
     component.session.clearTokens();
+    fixture.detectChanges();
+
     expect(component.metrics()).toBeNull();
     expect(component.isLoading()).toBeFalse();
+    expect(fixture.nativeElement.querySelector('.anonymous-session-banner')).toBeTruthy();
 
     // Une réponse tardive ne doit pas réécraser metrics() après déconnexion
     delayedSummary$.next(mockSummary);
