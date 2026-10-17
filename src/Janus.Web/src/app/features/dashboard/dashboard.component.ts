@@ -1,13 +1,22 @@
 import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { JanusApiService } from '../../core/services/api.service';
 import { SessionService, UserRole } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
 import { PrometheusMetricsSummary, ApiHealth } from '../../core/models/health.model';
-import { TransitCard } from '../../core/models/card.model';
 import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
+
+export type DatabaseStatusState = 'OPERATIONAL' | 'UNAVAILABLE' | 'UNVERIFIED' | 'CHECKING';
+
+export interface DatabaseStatusInfo {
+  state: DatabaseStatusState;
+  label: string;
+  isOperational: boolean;
+  isError: boolean;
+}
 
 @Component({
   selector: 'app-dashboard',
@@ -23,10 +32,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   readonly isLoading = signal(true);
   readonly errorMessage = signal<string | null>(null);
+  readonly summaryError = signal<HttpErrorResponse | Error | null>(null);
 
   readonly metrics = signal<PrometheusMetricsSummary | null>(null);
   readonly health = signal<ApiHealth | null>(null);
-  readonly cards = signal<TransitCard[]>([]);
 
   private sessionSub?: Subscription;
   private healthSub?: Subscription;
@@ -49,7 +58,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.healthSub?.unsubscribe();
     this.summarySub?.unsubscribe();
     this.metrics.set(null);
-    this.cards.set([]);
+    this.summaryError.set(null);
     this.errorMessage.set(null);
     if (role === 'ANONYMOUS') {
       this.isLoading.set(false);
@@ -64,6 +73,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     const expectedVersion = this.session.sessionVersion();
     this.errorMessage.set(null);
+    this.summaryError.set(null);
 
     // Charge en parallèle la santé de l'API (accessible publiquement)
     this.healthSub = this.api.getHealth().subscribe({
@@ -90,15 +100,72 @@ export class DashboardComponent implements OnInit, OnDestroy {
       next: (m) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.metrics.set(m);
+        this.summaryError.set(null);
         this.isLoading.set(false);
       },
-      error: () => {
+      error: (err: unknown) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.metrics.set(null);
+        this.summaryError.set(err instanceof HttpErrorResponse ? err : (err instanceof Error ? err : new Error(String(err))));
         this.isLoading.set(false);
         this.errorMessage.set('Impossible de charger la synthèse d\'exploitation (/api/dashboard/summary). Vérifiez votre jeton de session (Borne ou Admin).');
       }
     });
+  }
+
+  get postgresStatus(): DatabaseStatusInfo {
+    if (this.session.activeRole() === 'ANONYMOUS') {
+      return {
+        state: 'UNVERIFIED',
+        label: 'Non vérifié (session requise)',
+        isOperational: false,
+        isError: false
+      };
+    }
+
+    if (this.metrics()) {
+      return {
+        state: 'OPERATIONAL',
+        label: 'Opérationnel (vérifié via SQL)',
+        isOperational: true,
+        isError: false
+      };
+    }
+
+    const err = this.summaryError();
+    if (err) {
+      const status = err instanceof HttpErrorResponse ? err.status : (typeof (err as any)?.status === 'number' ? (err as any).status : undefined);
+      if (status === 401 || status === 403) {
+        return {
+          state: 'UNVERIFIED',
+          label: 'Non vérifié (droits insuffisants)',
+          isOperational: false,
+          isError: false
+        };
+      }
+      return {
+        state: 'UNAVAILABLE',
+        label: 'Indisponible (échec requête SQL)',
+        isOperational: false,
+        isError: true
+      };
+    }
+
+    if (this.isLoading()) {
+      return {
+        state: 'CHECKING',
+        label: 'Vérification en cours...',
+        isOperational: false,
+        isError: false
+      };
+    }
+
+    return {
+      state: 'UNVERIFIED',
+      label: 'Non vérifié',
+      isOperational: false,
+      isError: false
+    };
   }
 
   get acceptanceRate(): number {
@@ -108,18 +175,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get activeCardsCount(): number {
-    return this.metrics()?.activeCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'ACTIVE').length;
+    return this.metrics()?.activeCardsCount ?? 0;
   }
 
   get revokedCardsCount(): number {
-    return this.metrics()?.revokedCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'REVOKED').length;
+    return this.metrics()?.revokedCardsCount ?? 0;
   }
 
   get totalCardsCount(): number {
-    return this.metrics()?.totalCardsCount ?? this.cards().length;
+    return this.metrics()?.totalCardsCount ?? 0;
   }
 
   get totalCirculatingBalanceMillimes(): number {
-    return this.metrics()?.totalCirculatingBalanceMillimes ?? this.cards().reduce((sum, c) => sum + (c.balanceMillimes || 0), 0);
+    return this.metrics()?.totalCirculatingBalanceMillimes ?? 0;
   }
 }

@@ -99,10 +99,10 @@
       </div>
     </div>
 
-    <!-- Recettes Encaissées -->
+    <!-- Total des Débits Enregistrés -->
     <div class="kpi-card border-primary">
       <div class="kpi-head">
-        <span class="kpi-title">RECETTES ESTIMÉES</span>
+        <span class="kpi-title">TOTAL DES DÉBITS ENREGISTRÉS</span>
         <span class="kpi-icon blue">💰</span>
       </div>
       <div class="kpi-value text-primary">
@@ -110,7 +110,7 @@
         @else { {{ metrics()?.totalDebitedMillimes || 0 | millimes }} }
       </div>
       <div class="kpi-footer">
-        <span>Basé sur <code>janus_fare_amount_millimes_total</code></span>
+        <span>Consolidé depuis PostgreSQL (table <code>FareTransactions</code>)</span>
       </div>
     </div>
   </section>
@@ -158,11 +158,22 @@
             <div class="system-item">
               <div class="system-name">
                 <strong>API Janus Kestrel (.NET 10)</strong>
-                <small>Endpoint /health</small>
+                <small>Sonde HTTP /health (Kestrel en mémoire)</small>
               </div>
               <div class="system-status">
-                <span class="status-indicator" [class.on]="health()?.status === 'healthy'"></span>
-                <span>{{ health()?.status === 'healthy' ? 'Opérationnel' : 'Hors ligne' }}</span>
+                <span class="status-indicator" [class.on]="health()?.status === 'healthy'" [class.error]="health()?.status === 'unreachable'"></span>
+                <span>{{ health()?.status === 'healthy' ? 'Accessible' : (health()?.status === 'unreachable' ? 'Inaccessible' : 'Vérification...') }}</span>
+              </div>
+            </div>
+
+            <div class="system-item">
+              <div class="system-name">
+                <strong>Base relationnelle (PostgreSQL 18)</strong>
+                <small>Persistance ACID & Grand livre FareTransactions</small>
+              </div>
+              <div class="system-status">
+                <span class="status-indicator" [class.on]="postgresStatus.isOperational" [class.error]="postgresStatus.isError"></span>
+                <span>{{ postgresStatus.label }}</span>
               </div>
             </div>
 

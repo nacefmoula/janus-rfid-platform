@@ -257,6 +257,10 @@
   background-color: var(--color-success);
   box-shadow: 0 0 6px var(--color-success);
 }
+.status-indicator.error {
+  background-color: var(--color-danger);
+  box-shadow: 0 0 6px var(--color-danger);
+}
 .link-grafana {
   color: var(--color-primary);
   font-weight: 600;
