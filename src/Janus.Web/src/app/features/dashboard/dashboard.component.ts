@@ -1,12 +1,13 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { JanusApiService } from '../../core/services/api.service';
+import { SessionService, UserRole } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
 import { PrometheusMetricsSummary, ApiHealth } from '../../core/models/health.model';
 import { TransitCard } from '../../core/models/card.model';
 import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
-import { BadgeComponent } from '../../shared/components/badge/badge.component';
 
 @Component({
   selector: 'app-dashboard',
@@ -15,8 +16,9 @@ import { BadgeComponent } from '../../shared/components/badge/badge.component';
   templateUrl: './dashboard.component.html',
   styleUrls: ['./dashboard.component.css']
 })
-export class DashboardComponent implements OnInit {
+export class DashboardComponent implements OnInit, OnDestroy {
   private readonly api = inject(JanusApiService);
+  readonly session = inject(SessionService);
   readonly validationSession = inject(ValidationSessionService);
 
   readonly isLoading = signal(true);
@@ -26,26 +28,65 @@ export class DashboardComponent implements OnInit {
   readonly health = signal<ApiHealth | null>(null);
   readonly cards = signal<TransitCard[]>([]);
 
+  private sessionSub?: Subscription;
+  private healthSub?: Subscription;
+  private summarySub?: Subscription;
+
   ngOnInit(): void {
+    this.loadDashboardData();
+    this.sessionSub = this.session.sessionChanges$.subscribe((role) => {
+      this.onSessionChanged(role);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.sessionSub?.unsubscribe();
+    this.healthSub?.unsubscribe();
+    this.summarySub?.unsubscribe();
+  }
+
+  private onSessionChanged(role: UserRole): void {
+    this.healthSub?.unsubscribe();
+    this.summarySub?.unsubscribe();
+    this.metrics.set(null);
+    this.cards.set([]);
+    this.errorMessage.set(null);
+    if (role === 'ANONYMOUS') {
+      this.isLoading.set(false);
+      return;
+    }
     this.loadDashboardData();
   }
 
   loadDashboardData(): void {
+    this.healthSub?.unsubscribe();
+    this.summarySub?.unsubscribe();
+
+    const expectedVersion = this.session.sessionVersion();
     this.isLoading.set(true);
     this.errorMessage.set(null);
 
     // Charge en parallèle la santé et la synthèse métier (/api/dashboard/summary)
-    this.api.getHealth().subscribe({
-      next: (h) => this.health.set(h),
-      error: () => this.health.set({ status: 'unreachable', service: 'janus-api' })
+    this.healthSub = this.api.getHealth().subscribe({
+      next: (h) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
+        this.health.set(h);
+      },
+      error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
+        this.health.set({ status: 'unreachable', service: 'janus-api' });
+      }
     });
 
-    this.api.getMetricsSummary().subscribe({
+    this.summarySub = this.api.getMetricsSummary().subscribe({
       next: (m) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.metrics.set(m);
         this.isLoading.set(false);
       },
       error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
+        this.metrics.set(null);
         this.isLoading.set(false);
         this.errorMessage.set('Impossible de charger la synthèse d\'exploitation (/api/dashboard/summary). Vérifiez votre jeton de session (Borne ou Admin).');
       }

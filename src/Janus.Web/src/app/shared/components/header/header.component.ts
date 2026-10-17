@@ -2,7 +2,7 @@ import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router } from '@angular/router';
-import { filter } from 'rxjs';
+import { Subscription, filter } from 'rxjs';
 import { SessionService, UserRole } from '../../../core/services/session.service';
 import { JanusApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
@@ -58,7 +58,8 @@ import { NotificationService } from '../../../core/services/notification.service
                 type="password"
                 class="form-input"
                 placeholder="Saisir le jeton opérateur borne (depuis .env)"
-                [(ngModel)]="tempTerminalToken"
+                [ngModel]="tempTerminalToken"
+                (ngModelChange)="onTerminalTokenInput($event)"
               />
               <span class="field-hint">Autorise la validation des titres et la consultation des cartes.</span>
             </div>
@@ -70,7 +71,8 @@ import { NotificationService } from '../../../core/services/notification.service
                 type="password"
                 class="form-input"
                 placeholder="Saisir le jeton administrateur (depuis .env)"
-                [(ngModel)]="tempAdminToken"
+                [ngModel]="tempAdminToken"
+                (ngModelChange)="onAdminTokenInput($event)"
               />
               <span class="field-hint">Autorise les recharges de solde, révocations et l'audit.</span>
             </div>
@@ -82,7 +84,7 @@ import { NotificationService } from '../../../core/services/notification.service
                   type="button"
                   class="role-card"
                   [class.active]="selectedRole === 'ANONYMOUS'"
-                  (click)="selectedRole = 'ANONYMOUS'">
+                  (click)="selectRole('ANONYMOUS')">
                   <strong>Visiteur</strong>
                   <small>Lecture publique seule</small>
                 </button>
@@ -90,7 +92,7 @@ import { NotificationService } from '../../../core/services/notification.service
                   type="button"
                   class="role-card"
                   [class.active]="selectedRole === 'TERMINAL'"
-                  (click)="selectedRole = 'TERMINAL'">
+                  (click)="selectRole('TERMINAL')">
                   <strong>Opérateur Borne</strong>
                   <small>Validation de trajets</small>
                 </button>
@@ -98,12 +100,19 @@ import { NotificationService } from '../../../core/services/notification.service
                   type="button"
                   class="role-card"
                   [class.active]="selectedRole === 'ADMIN'"
-                  (click)="selectedRole = 'ADMIN'">
+                  (click)="selectRole('ADMIN')">
                   <strong>Administrateur</strong>
                   <small>Gestion complète & Audit</small>
                 </button>
               </div>
             </div>
+
+            @if (sessionError()) {
+              <div class="session-error-box" role="alert">
+                <span aria-hidden="true">⚠️</span>
+                <span>{{ sessionError() }}</span>
+              </div>
+            }
 
             <div class="helpers-row">
               <button type="button" class="btn-text-danger" (click)="clearTokens()">
@@ -298,6 +307,19 @@ import { NotificationService } from '../../../core/services/notification.service
       color: var(--color-primary);
     }
 
+    .session-error-box {
+      background-color: var(--color-danger-bg);
+      border: 1px solid var(--color-danger-border);
+      color: var(--color-danger-text);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .helpers-row {
       display: flex;
       justify-content: space-between;
@@ -333,16 +355,19 @@ export class HeaderComponent implements OnInit, OnDestroy {
   readonly currentPageSubtitle = signal('Vue d\'ensemble de l\'exploitation billettique');
   readonly apiStatus = signal('checking...');
   readonly showModal = signal(false);
+  readonly sessionError = signal<string | null>(null);
 
   tempTerminalToken = '';
   tempAdminToken = '';
   selectedRole: UserRole = 'ANONYMOUS';
+  roleExplicitlySelected = false;
 
-  private healthInterval: any = null;
+  private healthInterval: ReturnType<typeof setInterval> | null = null;
+  private routerSub?: Subscription;
 
   ngOnInit(): void {
     this.updateRouteTitles(this.router.url);
-    this.router.events.pipe(filter(e => e instanceof NavigationEnd)).subscribe((e: any) => {
+    this.routerSub = this.router.events.pipe(filter(e => e instanceof NavigationEnd)).subscribe((e: NavigationEnd) => {
       this.updateRouteTitles(e.urlAfterRedirects);
     });
 
@@ -356,6 +381,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.healthInterval) clearInterval(this.healthInterval);
+    this.routerSub?.unsubscribe();
   }
 
   private updateRouteTitles(url: string): void {
@@ -385,22 +411,79 @@ export class HeaderComponent implements OnInit, OnDestroy {
     this.tempTerminalToken = this.session.terminalToken() || '';
     this.tempAdminToken = this.session.adminToken() || '';
     this.selectedRole = this.session.activeRole();
+    this.roleExplicitlySelected = false;
+    this.sessionError.set(null);
     this.showModal.update(v => !v);
+  }
+
+  selectRole(role: UserRole): void {
+    this.selectedRole = role;
+    this.roleExplicitlySelected = true;
+    this.sessionError.set(null);
+  }
+
+  onTerminalTokenInput(value: string): void {
+    this.tempTerminalToken = value;
+    this.sessionError.set(null);
+    if (!this.roleExplicitlySelected && this.selectedRole === 'ANONYMOUS' && value.trim()) {
+      this.selectedRole = 'TERMINAL';
+    }
+  }
+
+  onAdminTokenInput(value: string): void {
+    this.tempAdminToken = value;
+    this.sessionError.set(null);
+    if (!this.roleExplicitlySelected && (this.selectedRole === 'ANONYMOUS' || this.selectedRole === 'TERMINAL') && value.trim()) {
+      this.selectedRole = 'ADMIN';
+    }
   }
 
   clearTokens(): void {
     this.tempTerminalToken = '';
     this.tempAdminToken = '';
     this.selectedRole = 'ANONYMOUS';
+    this.roleExplicitlySelected = false;
+    this.sessionError.set(null);
     this.session.clearTokens();
+    this.showModal.set(false);
     this.notification.warning('Session effacée', 'Tous les jetons de session ont été purgés.');
   }
 
   applySession(): void {
-    this.session.setTerminalToken(this.tempTerminalToken);
-    this.session.setAdminToken(this.tempAdminToken);
-    this.session.setActiveRole(this.selectedRole);
+    const trimmedTerminal = this.tempTerminalToken.trim();
+    const trimmedAdmin = this.tempAdminToken.trim();
+
+    let targetRole: UserRole = this.selectedRole;
+    if (!this.roleExplicitlySelected && targetRole === 'ANONYMOUS') {
+      if (trimmedAdmin) {
+        targetRole = 'ADMIN';
+      } else if (trimmedTerminal) {
+        targetRole = 'TERMINAL';
+      }
+    }
+
+    if (targetRole === 'ADMIN' && !trimmedAdmin) {
+      const msg = 'Le rôle Administrateur requiert la saisie d\'un jeton Administrateur valide.';
+      this.sessionError.set(msg);
+      this.notification.warning('Jeton requis', msg);
+      return;
+    }
+
+    if (targetRole === 'TERMINAL' && !trimmedTerminal) {
+      const msg = 'Le rôle Opérateur Borne requiert la saisie d\'un jeton Opérateur Borne valide.';
+      this.sessionError.set(msg);
+      this.notification.warning('Jeton requis', msg);
+      return;
+    }
+
+    this.selectedRole = targetRole;
+    this.sessionError.set(null);
+    this.session.configureSession({
+      terminalToken: trimmedTerminal || null,
+      adminToken: trimmedAdmin || null,
+      role: targetRole
+    });
     this.showModal.set(false);
-    this.notification.success('Session configurée', `Profil actif : ${this.selectedRole}`);
+    this.notification.success('Session configurée', `Profil actif : ${targetRole}`);
   }
 }

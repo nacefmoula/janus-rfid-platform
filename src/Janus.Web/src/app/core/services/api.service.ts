@@ -1,9 +1,16 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { ApiHealth, PrometheusMetricsSummary } from '../models/health.model';
 import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse } from '../models/card.model';
 import { ValidationRequest, ValidationResult } from '../models/validation.model';
+import { SKIP_AUTH_CONTEXT, SKIP_AUTH_HEADER } from '../interceptors/auth.interceptor';
+import { SKIP_ERROR_TOAST_CONTEXT, SKIP_GLOBAL_ERROR_TOAST_HEADER } from '../interceptors/error.interceptor';
+
+export interface ValidationRequestOptions {
+  skipAuth?: boolean;
+  skipErrorToast?: boolean;
+}
 
 @Injectable({
   providedIn: 'root'
@@ -87,8 +94,24 @@ export class JanusApiService {
    * Requiert le token Terminal.
    * POST /api/validations
    */
-  validate(request: ValidationRequest): Observable<ValidationResult> {
-    return this.http.post<ValidationResult>(`${this.basePath}/api/validations`, request);
+  validate(request: ValidationRequest, options?: ValidationRequestOptions): Observable<ValidationResult> {
+    if (!options?.skipAuth && !options?.skipErrorToast) {
+      return this.http.post<ValidationResult>(`${this.basePath}/api/validations`, request);
+    }
+
+    let context = new HttpContext();
+    let headers = new HttpHeaders();
+
+    if (options.skipAuth) {
+      context = context.set(SKIP_AUTH_CONTEXT, true);
+      headers = headers.set(SKIP_AUTH_HEADER, 'true');
+    }
+    if (options.skipErrorToast) {
+      context = context.set(SKIP_ERROR_TOAST_CONTEXT, true);
+      headers = headers.set(SKIP_GLOBAL_ERROR_TOAST_HEADER, 'true');
+    }
+
+    return this.http.post<ValidationResult>(`${this.basePath}/api/validations`, request, { context, headers });
   }
 
   /**

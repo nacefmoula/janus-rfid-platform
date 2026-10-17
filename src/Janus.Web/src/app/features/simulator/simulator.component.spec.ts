@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { SimulatorComponent } from './simulator.component';
@@ -7,6 +7,7 @@ import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
 import { ValidationResult } from '../../core/models/validation.model';
+import { SimulatorCard } from '../../core/models/card.model';
 
 describe('SimulatorComponent', () => {
   let component: SimulatorComponent;
@@ -133,5 +134,47 @@ describe('SimulatorComponent', () => {
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('.screen-reason')?.textContent).toContain('Anti-passback : Titre déjà validé récemment');
+  });
+
+  it('5. simulateUnauthorized() utilise un bypass par requête (skipAuth + skipErrorToast) et ne modifie jamais SessionService', () => {
+    sessionService.configureSession({
+      terminalToken: 'borne-token-actif',
+      adminToken: 'admin-token-actif',
+      role: 'TERMINAL'
+    });
+    const versionBefore = sessionService.sessionVersion();
+
+    apiSpy.validate.and.returnValue(throwError(() => ({
+      status: 401,
+      error: { error: 'Unauthorized' }
+    })));
+
+    component.simulateUnauthorized();
+
+    expect(apiSpy.validate).toHaveBeenCalledWith(
+      jasmine.objectContaining({ cardUid: '04A1B2C3D4E5F6' }),
+      { skipAuth: true, skipErrorToast: true }
+    );
+    expect(sessionService.activeRole()).toBe('TERMINAL');
+    expect(sessionService.terminalToken()).toBe('borne-token-actif');
+    expect(sessionService.adminToken()).toBe('admin-token-actif');
+    expect(sessionService.sessionVersion()).toBe(versionBefore);
+    expect(component.currentError()?.status).toBe(401);
+  });
+
+  it('6 & 8. clearTokens() purge l\'état du simulateur et ignore toute réponse tardive issue d\'une ancienne session', () => {
+    const delayedCards$ = new Subject<SimulatorCard[]>();
+    apiSpy.getSimulatorCards.and.returnValue(delayedCards$.asObservable());
+
+    component.loadDemoCards();
+    expect(component.loadingCards()).toBeTrue();
+
+    sessionService.clearTokens();
+    expect(component.demoCards()).toEqual([]);
+    expect(component.loadingCards()).toBeFalse();
+
+    // Une réponse tardive de l'ancienne session ne doit pas réécraser demoCards
+    delayedCards$.next([{ uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte tardive' }]);
+    expect(component.demoCards()).toEqual([]);
   });
 });
