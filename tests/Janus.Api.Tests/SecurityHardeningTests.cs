@@ -581,7 +581,10 @@ public class SecurityHardeningTests : IAsyncLifetime
         var strongTerminal2 = "prod-t2-" + Guid.NewGuid().ToString("N");
         var strongAdmin = "prod-adm-" + Guid.NewGuid().ToString("N");
         var strongScrape = "prod-scr-" + Guid.NewGuid().ToString("N");
-        var dbConn = "Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password=local-dev-db-password-change-me";
+        var dbConn = Environment.GetEnvironmentVariable("ConnectionStrings__JanusDb")
+            ?? (Environment.GetEnvironmentVariable("POSTGRES_DB") != null
+                ? $"Host=localhost;Port=5433;Database={Environment.GetEnvironmentVariable("POSTGRES_DB")};Username={Environment.GetEnvironmentVariable("POSTGRES_USER")};Password={Environment.GetEnvironmentVariable("POSTGRES_PASSWORD")}"
+                : "Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password=local-dev-db-password-change-me");
 
         using var prodFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {

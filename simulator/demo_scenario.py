@@ -14,6 +14,7 @@ Démontre le flux opérationnel complet pour le PFE :
 import json
 import os
 import sys
+import time
 import urllib.request
 import urllib.error
 import uuid
@@ -24,7 +25,7 @@ TERMINAL_TOKEN = os.environ.get("TERMINAL_DEMO_TOKEN", "dev-terminal-token-chang
 TERMINAL_02_TOKEN = os.environ.get("TERMINAL_02_TOKEN", "dev-terminal-02-token-change-me")
 ADMIN_TOKEN = os.environ.get("ADMIN_DEMO_TOKEN", "dev-admin-token-change-me")
 
-def http_call(path, method="GET", payload=None, token=None):
+def http_call(path, method="GET", payload=None, token=None, retry_on_429=True):
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -32,16 +33,21 @@ def http_call(path, method="GET", payload=None, token=None):
     if payload is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(payload).encode()
-    req = urllib.request.Request(f"{BASE}{path}", data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, json.loads(resp.read().decode())
-    except urllib.error.HTTPError as err:
-        body = err.read().decode()
+    for attempt in range(12):
+        req = urllib.request.Request(f"{BASE}{path}", data=data, headers=headers, method=method)
         try:
-            return err.code, json.loads(body)
-        except Exception:
-            return err.code, body
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as err:
+            body = err.read().decode()
+            if err.code == 429 and retry_on_429 and attempt < 11:
+                time.sleep(0.25)
+                continue
+            try:
+                return err.code, json.loads(body)
+            except Exception:
+                return err.code, body
+    return 429, {}
 
 def step(title):
     print("\n" + "=" * 70)
