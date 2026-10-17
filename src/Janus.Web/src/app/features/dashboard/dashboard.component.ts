@@ -34,15 +34,10 @@ export class DashboardComponent implements OnInit {
     this.isLoading.set(true);
     this.errorMessage.set(null);
 
-    // Charge en parallèle la santé, les cartes démo et les métriques OpenTelemetry
+    // Charge en parallèle la santé et la synthèse métier (/api/dashboard/summary)
     this.api.getHealth().subscribe({
       next: (h) => this.health.set(h),
       error: () => this.health.set({ status: 'unreachable', service: 'janus-api' })
-    });
-
-    this.api.getDemoCards().subscribe({
-      next: (c) => this.cards.set(c),
-      error: () => {}
     });
 
     this.api.getMetricsSummary().subscribe({
@@ -50,9 +45,9 @@ export class DashboardComponent implements OnInit {
         this.metrics.set(m);
         this.isLoading.set(false);
       },
-      error: (err) => {
+      error: () => {
         this.isLoading.set(false);
-        this.errorMessage.set('Impossible de charger les métriques d\'ingestion (/metrics).');
+        this.errorMessage.set('Impossible de charger la synthèse d\'exploitation (/api/dashboard/summary). Vérifiez votre jeton de session (Borne ou Admin).');
       }
     });
   }
@@ -64,14 +59,18 @@ export class DashboardComponent implements OnInit {
   }
 
   get activeCardsCount(): number {
-    return this.cards().filter(c => c.status.toString().toUpperCase() === 'ACTIVE').length;
+    return this.metrics()?.activeCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'ACTIVE').length;
   }
 
   get revokedCardsCount(): number {
-    return this.cards().filter(c => c.status.toString().toUpperCase() === 'REVOKED').length;
+    return this.metrics()?.revokedCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'REVOKED').length;
+  }
+
+  get totalCardsCount(): number {
+    return this.metrics()?.totalCardsCount ?? this.cards().length;
   }
 
   get totalCirculatingBalanceMillimes(): number {
-    return this.cards().reduce((sum, c) => sum + (c.balanceMillimes || 0), 0);
+    return this.metrics()?.totalCirculatingBalanceMillimes ?? this.cards().reduce((sum, c) => sum + (c.balanceMillimes || 0), 0);
   }
 }

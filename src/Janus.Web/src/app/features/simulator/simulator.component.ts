@@ -5,7 +5,7 @@ import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
 import { NotificationService } from '../../core/services/notification.service';
-import { TransitCard } from '../../core/models/card.model';
+import { SimulatorCard } from '../../core/models/card.model';
 import { ValidationRequest, ValidationResult, SimulatedValidationSessionEntry } from '../../core/models/validation.model';
 import { BadgeComponent } from '../../shared/components/badge/badge.component';
 import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
@@ -23,7 +23,7 @@ export class SimulatorComponent implements OnInit {
   readonly validationSession = inject(ValidationSessionService);
   private readonly notification = inject(NotificationService);
 
-  readonly demoCards = signal<TransitCard[]>([]);
+  readonly demoCards = signal<SimulatorCard[]>([]);
   readonly loadingCards = signal(false);
   readonly isProcessing = signal(false);
 
@@ -37,7 +37,7 @@ export class SimulatorComponent implements OnInit {
   readonly lastDurationMs = signal<number>(0);
   readonly lastRequestSent = signal<ValidationRequest | null>(null);
 
-  // État du solde avant validation pour calcul du différentiel
+  // État du solde avant validation (renseigné si disponible)
   readonly balanceBefore = signal<number | null>(null);
 
   ngOnInit(): void {
@@ -46,25 +46,25 @@ export class SimulatorComponent implements OnInit {
 
   loadDemoCards(): void {
     this.loadingCards.set(true);
-    this.api.getDemoCards().subscribe({
+    this.api.getSimulatorCards().subscribe({
       next: (cards) => {
         this.demoCards.set(cards);
         this.loadingCards.set(false);
         if (cards.length > 0 && !this.selectedUid) {
           this.selectedUid = cards[0].uid;
-          this.balanceBefore.set(cards[0].balanceMillimes);
+          this.balanceBefore.set(cards[0].balanceMillimes ?? null);
         }
       },
-      error: (err) => {
+      error: () => {
         this.loadingCards.set(false);
-        this.notification.error('Erreur chargement cartes', 'Impossible de récupérer les cartes de démo.');
+        this.notification.error('Erreur chargement cartes', 'Impossible de récupérer les cartes du simulateur (vérifiez votre jeton Borne ou Admin).');
       }
     });
   }
 
   onCardChange(): void {
     const card = this.demoCards().find(c => c.uid === this.selectedUid);
-    this.balanceBefore.set(card ? card.balanceMillimes : null);
+    this.balanceBefore.set(card?.balanceMillimes ?? null);
   }
 
   get effectiveUid(): string {
@@ -159,10 +159,10 @@ export class SimulatorComponent implements OnInit {
     this.currentError.set(null);
     this.lastRequestSent.set(request);
 
-    // Mémorise le solde actuel avant la requête
+    // Mémorise le solde actuel avant la requête s'il est disponible
     const cardBefore = this.demoCards().find(c => c.uid === request.cardUid);
     if (cardBefore) {
-      this.balanceBefore.set(cardBefore.balanceMillimes);
+      this.balanceBefore.set(cardBefore.balanceMillimes ?? null);
     }
 
     const start = performance.now();

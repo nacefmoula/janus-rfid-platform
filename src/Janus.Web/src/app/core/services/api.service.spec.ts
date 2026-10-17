@@ -81,16 +81,34 @@ describe('JanusApiService', () => {
     });
   });
 
-  it('devrait parser correctement le format texte des métriques Prometheus de /metrics', () => {
-    const mockPrometheusText = `
-# HELP janus_validations_total Total validation attempts
-# TYPE janus_validations_total counter
-janus_validations_total{decision="ACCEPTED",duplicate="false",reason="ACTIVE_CARD",terminal_id="TERMINAL-DEMO-01"} 12
-janus_validations_total{decision="REJECTED",duplicate="false",reason="INSUFFICIENT_FUNDS",terminal_id="TERMINAL-DEMO-01"} 3
-janus_validations_total{decision="CONFLICT",duplicate="false",reason="IDEMPOTENCY_CONFLICT",terminal_id="TERMINAL-DEMO-01"} 1
-# HELP janus_fare_amount_debited_millimes_total Total fare revenue
-janus_fare_amount_debited_millimes_total{terminal_id="TERMINAL-DEMO-01"} 18000
-`;
+  it('devrait appeler GET /api/simulator/cards pour alimenter le simulateur sans privilèges admin ni exposition du solde', () => {
+    service.getSimulatorCards().subscribe(cards => {
+      expect(cards.length).toBe(2);
+      expect(cards[0].uid).toBe('04A1B2C3D4E5F6');
+      expect(cards[0].balanceMillimes).toBeUndefined();
+    });
+
+    const req = httpMock.expectOne('/api/simulator/cards');
+    expect(req.request.method).toBe('GET');
+    req.flush([
+      { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte démo active' },
+      { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte démo révoquée' }
+    ]);
+  });
+
+  it('devrait récupérer la synthèse métier via GET /api/dashboard/summary sans appeler /metrics', () => {
+    const mockSummary = {
+      totalValidations: 15,
+      acceptedValidations: 12,
+      rejectedValidations: 3,
+      conflictValidations: 1,
+      totalDebitedMillimes: 18000,
+      activeCardsCount: 2,
+      revokedCardsCount: 1,
+      totalCardsCount: 3,
+      totalCirculatingBalanceMillimes: 25000,
+      scrapedAt: '2026-10-16T10:00:00Z'
+    };
 
     service.getMetricsSummary().subscribe(summary => {
       expect(summary.totalValidations).toBe(15);
@@ -98,10 +116,12 @@ janus_fare_amount_debited_millimes_total{terminal_id="TERMINAL-DEMO-01"} 18000
       expect(summary.rejectedValidations).toBe(3);
       expect(summary.conflictValidations).toBe(1);
       expect(summary.totalDebitedMillimes).toBe(18000);
+      expect(summary.activeCardsCount).toBe(2);
+      expect(summary.scrapedAt instanceof Date).toBeTrue();
     });
 
-    const req = httpMock.expectOne('/metrics');
+    const req = httpMock.expectOne('/api/dashboard/summary');
     expect(req.request.method).toBe('GET');
-    req.flush(mockPrometheusText);
+    req.flush(mockSummary);
   });
 });

@@ -15,16 +15,16 @@ describe('DashboardComponent', () => {
   beforeEach(async () => {
     apiSpy = jasmine.createSpyObj('JanusApiService', ['getHealth', 'getDemoCards', 'getMetricsSummary']);
     apiSpy.getHealth.and.returnValue(of({ status: 'healthy', service: 'janus-api' }));
-    apiSpy.getDemoCards.and.returnValue(of([
-      { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte démo 1', balanceMillimes: 10000 },
-      { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte démo 2', balanceMillimes: 5000 }
-    ]));
     apiSpy.getMetricsSummary.and.returnValue(of({
       totalValidations: 20,
       acceptedValidations: 16,
       rejectedValidations: 4,
       conflictValidations: 1,
       totalDebitedMillimes: 24000,
+      activeCardsCount: 1,
+      revokedCardsCount: 1,
+      totalCardsCount: 2,
+      totalCirculatingBalanceMillimes: 15000,
       scrapedAt: new Date()
     }));
 
@@ -44,11 +44,11 @@ describe('DashboardComponent', () => {
     fixture.detectChanges();
   });
 
-  it('devrait créer le composant dashboard et charger les métriques initiales', () => {
+  it('devrait créer le composant dashboard et charger la synthèse sans appeler la route AdminOnly getDemoCards', () => {
     expect(component).toBeTruthy();
     expect(apiSpy.getHealth).toHaveBeenCalled();
-    expect(apiSpy.getDemoCards).toHaveBeenCalled();
     expect(apiSpy.getMetricsSummary).toHaveBeenCalled();
+    expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
   });
 
   it('devrait calculer correctement le taux d\'acceptation des validations', () => {
@@ -56,9 +56,10 @@ describe('DashboardComponent', () => {
     expect(component.acceptanceRate).toBe(80);
   });
 
-  it('devrait compter fidèlement les cartes actives et révoquées', () => {
+  it('devrait compter fidèlement les cartes actives et révoquées depuis la synthèse', () => {
     expect(component.activeCardsCount).toBe(1);
     expect(component.revokedCardsCount).toBe(1);
+    expect(component.totalCardsCount).toBe(2);
     expect(component.totalCirculatingBalanceMillimes).toBe(15000);
   });
 });

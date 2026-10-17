@@ -1,26 +1,187 @@
 using System.Diagnostics;
+using System.Net;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using Janus.Api;
+using Janus.Api.Security;
+
+static int GetRateLimitConfig(IConfiguration config, string primaryKey, string envFallbackKey, int defaultValue)
+{
+    var raw = config[primaryKey] ?? config[envFallbackKey];
+    return int.TryParse(raw, out var val) && val > 0 ? val : defaultValue;
+}
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<JanusDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("JanusDb")));
+builder.Services.AddDbContext<JanusDbContext>((sp, o) =>
+    o.UseNpgsql(sp.GetRequiredService<IConfiguration>().GetConnectionString("JanusDb")));
 builder.Services.AddSingleton(TimeProvider.System);
 
-// Validation centralisée de la configuration au démarrage
-var startupFareConfig = builder.Configuration["Fare:AmountMillimes"];
-if (!string.IsNullOrEmpty(startupFareConfig) && (!int.TryParse(startupFareConfig, out var startupFare) || startupFare <= 0))
-    throw new InvalidOperationException($"Invalid Fare:AmountMillimes '{startupFareConfig}'. Must be a strictly positive integer.");
+// REV-03: Configuration stricte de ForwardedHeaders (uniquement proxies et réseaux explicitement approuvés)
+builder.Services.AddOptions<ForwardedHeadersOptions>().Configure<IConfiguration>((options, config) =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
 
-var startupApbWindow = builder.Configuration["AntiPassback:WindowSeconds"];
-if (!string.IsNullOrEmpty(startupApbWindow)) {
-    if (!int.TryParse(startupApbWindow, out var startupWindow) || startupWindow <= 0)
-        throw new InvalidOperationException($"Invalid AntiPassback:WindowSeconds '{startupApbWindow}'. Must be a strictly positive integer.");
-}
+    var trustedProxies = config["ReverseProxy:TrustedProxies"];
+    if (!string.IsNullOrWhiteSpace(trustedProxies))
+    {
+        foreach (var ipStr in trustedProxies.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (IPAddress.TryParse(ipStr, out var ip))
+                options.KnownProxies.Add(ip);
+        }
+    }
+
+    var trustedNetworks = config["ReverseProxy:TrustedNetworks"];
+    if (!string.IsNullOrWhiteSpace(trustedNetworks))
+    {
+        foreach (var cidr in trustedNetworks.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = cidr.Split('/');
+            if (parts.Length == 2 && IPAddress.TryParse(parts[0], out var prefix) && int.TryParse(parts[1], out var prefixLen))
+                options.KnownIPNetworks.Add(new System.Net.IPNetwork(prefix, prefixLen));
+        }
+    }
+});
+
+// SEC-07 / REV-03 / REV-04: Rate Limiting à deux niveaux (pré-auth par source réseau fiable pour anonymes + post-auth par identité authentifiée)
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            JsonSerializer.Serialize(new { error = "rate_limit_exceeded", message = "Too many requests. Please retry later." }),
+            token);
+    };
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        // Les requêtes authentifiées sont gouvernées par leurs politiques dédiées par identité (ne partagent jamais le quota anonyme)
+        if (httpContext.User.Identity?.IsAuthenticated == true)
+        {
+            return RateLimitPartition.GetNoLimiter("authenticated");
+        }
+
+        var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown_ip";
+        return RateLimitPartition.GetSlidingWindowLimiter($"anon:{remoteIp}", _ =>
+        {
+            var cfg = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var anonLimit = GetRateLimitConfig(cfg, "RateLimiting:AnonymousPermitLimit", "ANONYMOUS_PERMIT_LIMIT", 30);
+            return new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = anonLimit,
+                Window = TimeSpan.FromSeconds(1),
+                SegmentsPerWindow = 2,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            };
+        });
+    });
+
+    // Paramètres initiaux calibrés vis-à-vis du pool Npgsql par défaut (MaxPoolSize=100) :
+    // - Validations : 30 req/s soutenu par borne (burst de 60 jetons pour reprise de buffer hors-ligne)
+    // - Admin : 15 req/s par identité administrative
+    // - Lectures / observation : 60 req/s par identité authentifiée
+    options.AddPolicy("ValidationsPolicy", httpContext =>
+    {
+        if (httpContext.User.Identity?.IsAuthenticated != true)
+        {
+            return RateLimitPartition.GetNoLimiter("unauth_pass_to_authz");
+        }
+
+        var partitionKey = $"terminal:{httpContext.User.Identity.Name ?? "unknown_terminal"}";
+        return RateLimitPartition.GetTokenBucketLimiter(partitionKey, _ =>
+        {
+            var cfg = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var valLimit = GetRateLimitConfig(cfg, "RateLimiting:ValidationsPermitLimit", "VALIDATIONS_PERMIT_LIMIT", 30);
+            var valBurst = GetRateLimitConfig(cfg, "RateLimiting:ValidationsBurstLimit", "VALIDATIONS_BURST_LIMIT", valLimit * 2);
+            return new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = Math.Max(valLimit, valBurst),
+                TokensPerPeriod = valLimit,
+                ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            };
+        });
+    });
+
+    options.AddPolicy("AdminPolicy", httpContext =>
+    {
+        if (httpContext.User.Identity?.IsAuthenticated != true)
+        {
+            return RateLimitPartition.GetNoLimiter("unauth_pass_to_authz");
+        }
+
+        var partitionKey = $"admin:{httpContext.User.Identity.Name ?? "unknown_admin"}";
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+        {
+            var cfg = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var adminLimit = GetRateLimitConfig(cfg, "RateLimiting:AdminPermitLimit", "ADMIN_PERMIT_LIMIT", 15);
+            return new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = adminLimit,
+                Window = TimeSpan.FromSeconds(1),
+                SegmentsPerWindow = 2,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            };
+        });
+    });
+
+    options.AddPolicy("CardsReadPolicy", httpContext =>
+    {
+        if (httpContext.User.Identity?.IsAuthenticated != true)
+        {
+            return RateLimitPartition.GetNoLimiter("unauth_pass_to_authz");
+        }
+
+        var partitionKey = $"read:{httpContext.User.Identity.Name ?? "unknown_reader"}";
+        return RateLimitPartition.GetSlidingWindowLimiter(partitionKey, _ =>
+        {
+            var cfg = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var cardsReadLimit = GetRateLimitConfig(cfg, "RateLimiting:CardsReadPermitLimit", "CARDS_READ_PERMIT_LIMIT", 60);
+            return new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = cardsReadLimit,
+                Window = TimeSpan.FromSeconds(1),
+                SegmentsPerWindow = 2,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            };
+        });
+    });
+});
+
+// SEC-02: Authentification et Autorisation centralisées ASP.NET Core
+builder.Services.AddAuthentication(JanusTokenAuthHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, JanusTokenAuthHandler>(JanusTokenAuthHandler.SchemeName, null);
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("TerminalOnly", p => p.RequireRole("Terminal").RequireClaim("permission", "validations:create"));
+    options.AddPolicy("AdminOnly", p => p.RequireRole("Admin").RequireClaim("permission", "cards:admin"));
+    options.AddPolicy("CardsRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "cards:read")));
+    options.AddPolicy("DashboardRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "dashboard:read") || ctx.User.HasClaim("permission", "cards:read")));
+    options.AddPolicy("AuditRead", p => p.RequireRole("Admin").RequireClaim("permission", "audit:read"));
+    options.AddPolicy("MetricsScrape", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "metrics:scrape") || ctx.User.IsInRole("Admin")));
+});
+
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, JanusAuthorizationMiddlewareResultHandler>();
 
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("janus-api", serviceVersion: "1.0.0"))
@@ -41,14 +202,78 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
-app.MapPrometheusScrapingEndpoint();
+// Validation centralisée de la configuration au démarrage (SEC-03 / REV-01 / REV-05 / REV-07)
+var startupFareConfig = app.Configuration["Fare:AmountMillimes"];
+if (!string.IsNullOrEmpty(startupFareConfig) && (!int.TryParse(startupFareConfig, out var startupFare) || startupFare <= 0))
+    throw new InvalidOperationException($"Invalid Fare:AmountMillimes '{startupFareConfig}'. Must be a strictly positive integer.");
+
+var startupApbWindow = app.Configuration["AntiPassback:WindowSeconds"];
+if (!string.IsNullOrEmpty(startupApbWindow)) {
+    if (!int.TryParse(startupApbWindow, out var startupWindow) || startupWindow <= 0)
+        throw new InvalidOperationException($"Invalid AntiPassback:WindowSeconds '{startupApbWindow}'. Must be a strictly positive integer.");
+}
+
+var isDev = app.Environment.IsDevelopment();
+var terminalToken = app.Configuration["TerminalAuth:DemoToken"];
+var terminal2Token = app.Configuration["TerminalAuth:Terminal2Token"];
+var adminToken = app.Configuration["AdminAuth:DemoToken"];
+var scrapeToken = app.Configuration["MetricsAuth:ScrapeToken"];
+
+string[] knownDevTokens = [
+    "dev-terminal-token-change-me",
+    "dev-admin-token-change-me",
+    "dev-terminal-02-token-change-me",
+    "dev-metrics-scrape-token-change-me"
+];
+
+if (!isDev)
+{
+    if (string.IsNullOrWhiteSpace(terminalToken) || terminalToken.Length < 16 || knownDevTokens.Contains(terminalToken))
+        throw new InvalidOperationException("Production configuration error: 'TerminalAuth:DemoToken' must be configured with a non-default secret (minimum 16 characters) in non-development environments.");
+
+    if (string.IsNullOrWhiteSpace(terminal2Token) || terminal2Token.Length < 16 || knownDevTokens.Contains(terminal2Token))
+        throw new InvalidOperationException("Production configuration error: 'TerminalAuth:Terminal2Token' must be configured with a non-default secret (minimum 16 characters) in non-development environments.");
+
+    if (string.IsNullOrWhiteSpace(adminToken) || adminToken.Length < 16 || knownDevTokens.Contains(adminToken))
+        throw new InvalidOperationException("Production configuration error: 'AdminAuth:DemoToken' must be configured with a non-default secret (minimum 16 characters) in non-development environments.");
+
+    if (string.IsNullOrWhiteSpace(scrapeToken) || scrapeToken.Length < 16 || knownDevTokens.Contains(scrapeToken))
+        throw new InvalidOperationException("Production configuration error: 'MetricsAuth:ScrapeToken' must be configured with a non-default secret (minimum 16 characters) in non-development environments.");
+}
+
+// Vérification systématique d'unicité de tous les jetons configurés (évite toute collision de rôle Admin/Scraper/Terminal)
+var configuredTokens = new[] { terminalToken, terminal2Token, adminToken, scrapeToken }
+    .Where(t => !string.IsNullOrWhiteSpace(t))
+    .Select(t => t!.Trim())
+    .ToList();
+
+if (configuredTokens.Count != configuredTokens.Distinct(StringComparer.Ordinal).Count())
+{
+    throw new InvalidOperationException("Security configuration error: Distinct tokens are required across Terminal1, Terminal2, Admin, and MetricsScrape.");
+}
+
+// REV-03: Ordre strict du pipeline : Routing -> ForwardedHeaders (si proxies/réseaux de confiance configurés) -> Authentication -> RateLimiter -> Authorization
+app.UseRouting();
+if (!string.IsNullOrWhiteSpace(app.Configuration["ReverseProxy:TrustedProxies"]) ||
+    !string.IsNullOrWhiteSpace(app.Configuration["ReverseProxy:TrustedNetworks"]))
+{
+    app.UseWhen(ctx => ctx.Connection.RemoteIpAddress is not null, branch => branch.UseForwardedHeaders());
+}
+app.UseAuthentication();
+app.UseRateLimiter();
+app.UseAuthorization();
+
+app.MapPrometheusScrapingEndpoint()
+    .RequireAuthorization("MetricsScrape")
+    .RequireRateLimiting("CardsReadPolicy");
 
 await using (var scope = app.Services.CreateAsyncScope()) {
     var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
     for (int attempt = 0; ; attempt++) {
         try {
             await db.Database.MigrateAsync();
-            if (!await db.Cards.AnyAsync()) {
+            // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
+            if (app.Environment.IsDevelopment() && !await db.Cards.AnyAsync()) {
                 db.Cards.AddRange(
                     new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
                     new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
@@ -62,34 +287,91 @@ await using (var scope = app.Services.CreateAsyncScope()) {
     }
 }
 
-static string ExtractBearer(HttpRequest req) {
-    var h = req.Headers.Authorization.ToString();
-    return h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? h[7..].Trim() : "";
-}
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "janus-api" }))
+    .AllowAnonymous();
 
-static bool CheckToken(string? supplied, string? expected) {
-    if (string.IsNullOrEmpty(supplied) || string.IsNullOrEmpty(expected)) return false;
-    return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(supplied), Encoding.UTF8.GetBytes(expected));
-}
+app.MapGet("/api/demo/cards", async (HttpRequest http, JanusDbContext db) => {
+    int limit = 50;
+    if (http.Query.TryGetValue("limit", out var limitStr) && int.TryParse(limitStr, out var parsedLimit))
+        limit = Math.Clamp(parsedLimit, 1, 100);
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "janus-api" }));
+    int offset = 0;
+    if (http.Query.TryGetValue("offset", out var offsetStr) && int.TryParse(offsetStr, out var parsedOffset))
+        offset = Math.Max(0, parsedOffset);
 
-app.MapGet("/api/demo/cards", async (JanusDbContext db) =>
-    Results.Ok(await db.Cards.OrderBy(c => c.Uid).Select(c => new {
-        c.Uid,
-        status = c.Status.ToString(),
-        c.Label,
-        balanceMillimes = c.BalanceMillimes
-    }).ToListAsync()));
+    return Results.Ok(await db.Cards.AsNoTracking()
+        .OrderBy(c => c.Uid)
+        .Skip(offset)
+        .Take(limit)
+        .Select(c => new {
+            c.Uid,
+            status = c.Status.ToString(),
+            c.Label,
+            balanceMillimes = c.BalanceMillimes
+        }).ToListAsync());
+})
+    .RequireAuthorization("AdminOnly")
+    .RequireRateLimiting("AdminPolicy");
 
-app.MapGet("/api/cards/{uid}", async (string uid, HttpRequest http, IConfiguration config, JanusDbContext db) => {
-    var terminalExpected = config["TerminalAuth:DemoToken"];
-    var adminExpected = config["AdminAuth:DemoToken"];
-    var supplied = ExtractBearer(http);
+// REV-02 / FIN-02: Endpoint dédié au simulateur ne retournant que les informations minimales (sans solde financier ni métadonnées internes), avec limite paginée
+app.MapGet("/api/simulator/cards", async (HttpRequest http, JanusDbContext db) => {
+    int limit = 20;
+    if (http.Query.TryGetValue("limit", out var limitStr) && int.TryParse(limitStr, out var parsedLimit))
+        limit = Math.Clamp(parsedLimit, 1, 50);
 
-    if (!CheckToken(supplied, terminalExpected) && !CheckToken(supplied, adminExpected))
-        return Results.Json(new { error = "unauthorized", message = "Valid terminal or admin credential required." }, statusCode: 401);
+    int offset = 0;
+    if (http.Query.TryGetValue("offset", out var offsetStr) && int.TryParse(offsetStr, out var parsedOffset))
+        offset = Math.Max(0, parsedOffset);
 
+    return Results.Ok(await db.Cards.AsNoTracking()
+        .OrderBy(c => c.Uid)
+        .Skip(offset)
+        .Take(limit)
+        .Select(c => new {
+            c.Uid,
+            status = c.Status.ToString(),
+            c.Label
+        }).ToListAsync());
+})
+    .RequireAuthorization("CardsRead")
+    .RequireRateLimiting("CardsReadPolicy");
+
+// REV-02 / FIN-03: Endpoint métier synthétique pour le dashboard (agrégats SQL regroupés + compteur mémoire explicite pour les rejets 409 non persistés en base)
+app.MapGet("/api/dashboard/summary", async (JanusDbContext db) => {
+    var validationCounts = await db.Validations.AsNoTracking()
+        .GroupBy(v => v.Decision)
+        .Select(g => new { Decision = g.Key, Count = g.Count() })
+        .ToListAsync();
+    var acceptedValidations = validationCounts.FirstOrDefault(x => x.Decision == ValidationDecision.Accepted)?.Count ?? 0;
+    var rejectedValidations = validationCounts.FirstOrDefault(x => x.Decision == ValidationDecision.Rejected)?.Count ?? 0;
+
+    var totalDebitedMillimes = await db.FareTransactions.AsNoTracking().SumAsync(t => (long?)t.AmountMillimes) ?? 0L;
+
+    var cardStats = await db.Cards.AsNoTracking()
+        .GroupBy(c => c.Status)
+        .Select(g => new { Status = g.Key, Count = g.Count(), TotalBalance = g.Sum(c => (long)c.BalanceMillimes) })
+        .ToListAsync();
+    var activeCardsCount = cardStats.FirstOrDefault(x => x.Status == CardStatus.Active)?.Count ?? 0;
+    var revokedCardsCount = cardStats.FirstOrDefault(x => x.Status == CardStatus.Revoked)?.Count ?? 0;
+    var totalCirculatingBalanceMillimes = cardStats.Sum(x => x.TotalBalance);
+
+    return Results.Ok(new {
+        totalValidations = acceptedValidations + rejectedValidations,
+        acceptedValidations,
+        rejectedValidations,
+        conflictValidations = JanusMetrics.GetConflictValidationsCount(),
+        totalDebitedMillimes,
+        activeCardsCount,
+        revokedCardsCount,
+        totalCardsCount = activeCardsCount + revokedCardsCount,
+        totalCirculatingBalanceMillimes,
+        scrapedAt = DateTimeOffset.UtcNow
+    });
+})
+    .RequireAuthorization("DashboardRead")
+    .RequireRateLimiting("CardsReadPolicy");
+
+app.MapGet("/api/cards/{uid}", async (string uid, HttpRequest http, JanusDbContext db) => {
     var normalized = uid.Trim().ToUpperInvariant();
     var card = await db.Cards.AsNoTracking().SingleOrDefaultAsync(c => c.Uid == normalized);
     if (card is null) return Results.NotFound(new { error = "card_not_found" });
@@ -123,21 +405,9 @@ app.MapGet("/api/cards/{uid}", async (string uid, HttpRequest http, IConfigurati
         offset,
         transactions = txs
     });
-});
+}).RequireAuthorization("CardsRead").RequireRateLimiting("CardsReadPolicy");
 
-app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, IConfiguration config, JanusDbContext db) => {
-    var adminExpected = config["AdminAuth:DemoToken"];
-    var terminalExpected = config["TerminalAuth:DemoToken"];
-    var supplied = ExtractBearer(http);
-
-    // 1. Refus explicite si un terminal tente d'accéder aux journaux d'audit administratif
-    if (!string.IsNullOrEmpty(terminalExpected) && CheckToken(supplied, terminalExpected))
-        return Results.Json(new { error = "forbidden", message = "Terminal credentials cannot view administrative audit logs." }, statusCode: 403);
-
-    // 2. Vérification stricte des droits administrateur
-    if (string.IsNullOrEmpty(adminExpected) || !CheckToken(supplied, adminExpected))
-        return Results.Json(new { error = "unauthorized", message = "Admin credential missing or invalid." }, statusCode: 401);
-
+app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusDbContext db) => {
     if (string.IsNullOrWhiteSpace(uid) || uid.Length > 64)
         return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
 
@@ -181,28 +451,16 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, IConfi
         offset,
         auditLogs = audits
     });
-});
+}).RequireAuthorization("AuditRead").RequireRateLimiting("AdminPolicy");
 
-app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, HttpRequest http, IConfiguration config, JanusDbContext db, ILogger<Program> logger) => {
-    var adminExpected = config["AdminAuth:DemoToken"];
-    var terminalExpected = config["TerminalAuth:DemoToken"];
-    var supplied = ExtractBearer(http);
-
-    // 1. Refus explicite si un terminal tente d'effectuer une opération administrative
-    if (!string.IsNullOrEmpty(terminalExpected) && CheckToken(supplied, terminalExpected))
-        return Results.Json(new { error = "forbidden", message = "Terminal credentials cannot perform card administration." }, statusCode: 403);
-
-    // 2. Vérification des droits administrateur
-    if (string.IsNullOrEmpty(adminExpected) || !CheckToken(supplied, adminExpected))
-        return Results.Json(new { error = "unauthorized", message = "Admin credential missing or invalid." }, statusCode: 401);
-
+app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, ClaimsPrincipal user, JanusDbContext db, ILogger<Program> logger) => {
     if (string.IsNullOrWhiteSpace(uid) || uid.Length > 64)
         return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
 
     if (request.BalanceMillimes < 0)
         return Results.BadRequest(new { error = "invalid_balance", message = "Balance cannot be negative." });
 
-    // 3. Validation stricte du statut si fourni (uniquement Active ou Revoked, insensible à la casse)
+    // Validation stricte du statut si fourni (uniquement Active ou Revoked, insensible à la casse)
     CardStatus? requestedStatus = null;
     if (!string.IsNullOrWhiteSpace(request.Status)) {
         var s = request.Status.Trim();
@@ -216,6 +474,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
     }
 
     var normalized = uid.Trim().ToUpperInvariant();
+    var actor = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "ADMIN";
 
     await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
     try {
@@ -224,14 +483,14 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
         var prevStatus = card?.Status.ToString();
         var action = card is null ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED";
 
-        // 4. Détermination du statut effectif :
+        // Détermination du statut effectif :
         // - Pour une nouvelle carte : Active par défaut si aucun statut n'est fourni.
         // - Pour une carte existante : conserve son statut actuel si aucun statut n'est fourni.
         CardStatus targetStatus = card is null
             ? (requestedStatus ?? CardStatus.Active)
             : (requestedStatus ?? card.Status);
 
-        // 5. Motif d'audit distinct du libellé de la carte
+        // Motif d'audit distinct du libellé de la carte
         var auditReason = !string.IsNullOrWhiteSpace(request.Reason)
             ? request.Reason.Trim()
             : (card is null ? "Initial card provisioning" : "Admin balance/status update");
@@ -251,7 +510,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
                 card.Label = request.Label;
         }
 
-        // Traçabilité d'audit avec statut réel persisté
+        // Traçabilité d'audit avec identité réelle persistée (SEC-06)
         var audit = new CardAuditLog {
             CardUid = normalized,
             Action = action,
@@ -260,7 +519,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
             PreviousStatus = prevStatus,
             NewStatus = card.Status.ToString(),
             Reason = auditReason,
-            Actor = "ADMIN",
+            Actor = actor,
             CreatedAt = DateTimeOffset.UtcNow
         };
         db.CardAuditLogs.Add(audit);
@@ -269,8 +528,8 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
         await tx.CommitAsync();
 
         // Journalisation sans secrets
-        logger.LogInformation("Admin card update: action={Action}, uid={CardUid}, balance={OldBal}->{NewBal}, status={OldStat}->{NewStat}, reason={Reason}",
-            action, normalized, prevBalance, request.BalanceMillimes, prevStatus, card.Status, auditReason);
+        logger.LogInformation("Admin card update: action={Action}, uid={CardUid}, balance={OldBal}->{NewBal}, status={OldStat}->{NewStat}, reason={Reason}, actor={Actor}",
+            action, normalized, prevBalance, request.BalanceMillimes, prevStatus, card.Status, auditReason, actor);
 
         return Results.Ok(new {
             card.Uid,
@@ -283,19 +542,11 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Htt
         logger.LogError(ex, "Failed to persist admin card upsert for {CardUid}", normalized);
         throw;
     }
-});
+}).RequireAuthorization("AdminOnly").RequireRateLimiting("AdminPolicy");
 
-app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest http, IConfiguration config, JanusDbContext db, TimeProvider timeProvider, ILogger<Program> logger) => {
-    var expected = config["TerminalAuth:DemoToken"];
-    var supplied = ExtractBearer(http);
-
-    string terminalId = "TERMINAL-DEMO-01";
-    var term2Token = config["TerminalAuth:Terminal2Token"];
-    if (!string.IsNullOrEmpty(term2Token) && CheckToken(supplied, term2Token)) {
-        terminalId = "TERMINAL-DEMO-02";
-    } else if (string.IsNullOrEmpty(expected) || !CheckToken(supplied, expected)) {
-        return Results.Json(new { error = "unauthorized", message = "Terminal credential missing or invalid." }, statusCode: 401);
-    }
+app.MapPost("/api/validations", async (ValidationRequest request, ClaimsPrincipal user, IConfiguration config, JanusDbContext db, TimeProvider timeProvider, ILogger<Program> logger) => {
+    // SEC-02: Identité du terminal déterminée côté serveur par le jeton authentifié
+    var terminalId = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "TERMINAL-DEMO-01";
 
     var validationStartTime = Stopwatch.GetTimestamp();
     var serverNow = timeProvider.GetUtcNow();
@@ -331,6 +582,7 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
     if (existing is not null) {
         var elapsedDuplicateSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
         if (existing.PayloadHash != hash) {
+            JanusMetrics.RecordConflictValidation();
             JanusMetrics.ValidationDurationSeconds.Record(elapsedDuplicateSeconds,
                 new KeyValuePair<string, object?>("decision", "CONFLICT"));
             JanusMetrics.ValidationsTotal.Add(1,
@@ -457,6 +709,7 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
         }
         var elapsedRaceSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
         if (winner.PayloadHash != hash) {
+            JanusMetrics.RecordConflictValidation();
             JanusMetrics.ValidationDurationSeconds.Record(elapsedRaceSeconds,
                 new KeyValuePair<string, object?>("decision", "CONFLICT"));
             JanusMetrics.ValidationsTotal.Add(1,
@@ -485,8 +738,8 @@ app.MapPost("/api/validations", async (ValidationRequest request, HttpRequest ht
             receivedAt = winner.ReceivedAt
         });
     }
-});
+}).RequireAuthorization("TerminalOnly").RequireRateLimiting("ValidationsPolicy");
 
 app.Run();
- 
+
 public partial class Program { }

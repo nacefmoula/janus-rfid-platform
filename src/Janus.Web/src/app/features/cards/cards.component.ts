@@ -46,7 +46,14 @@ export class CardsComponent implements OnInit {
 
   loadCards(): void {
     this.isLoading.set(true);
-    this.api.getDemoCards().subscribe({
+    const useTerminalCompatibleRoute =
+      this.session.activeRole() === 'TERMINAL' ||
+      (this.session.hasTerminalAuth() && !this.session.hasAdminAuth());
+    const request$ = useTerminalCompatibleRoute
+      ? this.api.getSimulatorCards()
+      : this.api.getDemoCards();
+
+    request$.subscribe({
       next: (data) => {
         this.cards.set(data);
         this.isLoading.set(false);
@@ -87,7 +94,7 @@ export class CardsComponent implements OnInit {
           uid: card.uid,
           status: card.status,
           label: card.label,
-          balanceMillimes: card.balanceMillimes,
+          balanceMillimes: card.balanceMillimes ?? 0,
           transactionsCount: 0,
           limit: 50,
           offset: 0,
@@ -110,7 +117,7 @@ export class CardsComponent implements OnInit {
   openEditModal(card: TransitCard): void {
     this.targetCardUid = card.uid;
     this.editLabel = card.label;
-    this.editBalanceMillimes = card.balanceMillimes;
+    this.editBalanceMillimes = card.balanceMillimes ?? 0;
     this.editStatus = (card.status as CardStatus) || 'Active';
     this.editReason = '';
     this.showEditModal.set(true);

@@ -5,8 +5,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-janus_db}
       POSTGRES_USER: ${POSTGRES_USER:-janus_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
     volumes: ["janus_postgres_data:/var/lib/postgresql"]
+    networks:
+      - janus_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -20,11 +22,20 @@ services:
       ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_USER:-janus_app};Password=${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
       TerminalAuth__DemoToken: ${TERMINAL_DEMO_TOKEN:-dev-terminal-token-change-me}
       AdminAuth__DemoToken: ${ADMIN_DEMO_TOKEN:-dev-admin-token-change-me}
+      MetricsAuth__ScrapeToken: ${METRICS_SCRAPE_TOKEN:-dev-metrics-scrape-token-change-me}
       Fare__AmountMillimes: ${FARE_AMOUNT_MILLIMES:-1500}
       AntiPassback__Enabled: ${ANTIPASSBACK_ENABLED:-true}
       AntiPassback__WindowSeconds: ${ANTIPASSBACK_WINDOW_SECONDS:-30}
       TerminalAuth__Terminal2Token: ${TERMINAL_02_TOKEN:-dev-terminal-02-token-change-me}
-    ports: ["5080:8080"]
+      RateLimiting__ValidationsPermitLimit: ${VALIDATIONS_PERMIT_LIMIT:-30}
+      RateLimiting__AdminPermitLimit: ${ADMIN_PERMIT_LIMIT:-15}
+      RateLimiting__CardsReadPermitLimit: ${CARDS_READ_PERMIT_LIMIT:-60}
+      RateLimiting__AnonymousPermitLimit: ${ANONYMOUS_PERMIT_LIMIT:-30}
+      ReverseProxy__TrustedProxies: ${TRUSTED_PROXIES:-172.28.0.10}
+      ReverseProxy__TrustedNetworks: ${TRUSTED_NETWORKS:-}
+    ports: ["127.0.0.1:5080:8080"]
+    networks:
+      - janus_net
     depends_on:
       db:
         condition: service_healthy
@@ -35,7 +46,9 @@ services:
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - janus_prometheus_data:/prometheus
-    ports: ["9090:9090"]
+    ports: ["127.0.0.1:9090:9090"]
+    networks:
+      - janus_net
     depends_on:
       - api
 
@@ -43,18 +56,19 @@ services:
     image: grafana/grafana:11.2.0
     container_name: janus-grafana
     environment:
-      # Sécurité locale/démo : mot de passe et accès anonyme paramétrables par variables d'environnement.
-      # En environnement de production : définir des mots de passe robustes et désactiver l'accès anonyme (GRAFANA_ANONYMOUS_ENABLED=false).
+      # Sécurité locale/démo : accès lié à 127.0.0.1:3000 et accès anonyme désactivé par défaut (GRAFANA_ANONYMOUS_ENABLED=false).
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-grafana-password-change-me}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_ENABLED:-true}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_ENABLED:-false}
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - janus_grafana_data:/var/lib/grafana
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
+    networks:
+      - janus_net
     depends_on:
       - prometheus
 
@@ -62,8 +76,18 @@ services:
     build: ./src/Janus.Web
     container_name: janus-web
     ports: ["${FRONTEND_PORT:-4280}:80"]
+    networks:
+      janus_net:
+        ipv4_address: 172.28.0.10
     depends_on:
       - api
+
+networks:
+  janus_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
   janus_postgres_data:

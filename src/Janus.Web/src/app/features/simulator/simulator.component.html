@@ -165,9 +165,11 @@
                     <app-badge [value]="card.status"></app-badge>
                   </div>
                   <div class="card-choice-desc">{{ card.label }}</div>
-                  <div class="card-choice-balance">
-                    Solde : <strong>{{ card.balanceMillimes | millimes }}</strong>
-                  </div>
+                  @if (card.balanceMillimes !== undefined && card.balanceMillimes !== null) {
+                    <div class="card-choice-balance">
+                      Solde : <strong>{{ card.balanceMillimes | millimes }}</strong>
+                    </div>
+                  }
                 </div>
               }
             </div>

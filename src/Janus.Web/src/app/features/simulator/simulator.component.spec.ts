@@ -16,10 +16,10 @@ describe('SimulatorComponent', () => {
   let validationSession: ValidationSessionService;
 
   beforeEach(async () => {
-    apiSpy = jasmine.createSpyObj('JanusApiService', ['getDemoCards', 'validate']);
-    apiSpy.getDemoCards.and.returnValue(of([
-      { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte démo active', balanceMillimes: 10000 },
-      { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte démo révoquée', balanceMillimes: 5000 }
+    apiSpy = jasmine.createSpyObj('JanusApiService', ['getSimulatorCards', 'getDemoCards', 'validate']);
+    apiSpy.getSimulatorCards.and.returnValue(of([
+      { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte démo active' },
+      { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte démo révoquée' }
     ]));
 
     await TestBed.configureTestingModule({
@@ -40,11 +40,13 @@ describe('SimulatorComponent', () => {
     fixture.detectChanges();
   });
 
-  it('devrait créer le composant simulateur et charger les cartes de démo', () => {
+  it('devrait créer le composant simulateur et charger les cartes via getSimulatorCards sans appeler getDemoCards ni exposer le solde initial', () => {
     expect(component).toBeTruthy();
-    expect(apiSpy.getDemoCards).toHaveBeenCalled();
+    expect(apiSpy.getSimulatorCards).toHaveBeenCalled();
+    expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
     expect(component.demoCards().length).toBe(2);
     expect(component.selectedUid).toBe('04A1B2C3D4E5F6');
+    expect(component.balanceBefore()).toBeNull();
   });
 
   it('devrait exécuter une validation standard et afficher la décision ACCEPTED', () => {

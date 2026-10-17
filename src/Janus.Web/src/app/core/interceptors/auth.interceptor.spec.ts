@@ -26,17 +26,21 @@ describe('authInterceptor', () => {
     httpMock.verify();
   });
 
-  it('ne devrait PAS injecter d\'Authorization sur les routes publiques (/health, /api/demo/cards)', () => {
+  it('ne devrait PAS injecter d\'Authorization sur la route publique (/health)', () => {
     session.setTerminalToken('token-borne-actif');
 
     httpClient.get('/health').subscribe();
     const reqHealth = httpMock.expectOne('/health');
     expect(reqHealth.request.headers.has('Authorization')).toBeFalse();
     reqHealth.flush({});
+  });
+
+  it('devrait injecter le Bearer token admin sur /api/demo/cards si présent', () => {
+    session.setAdminToken('mon-token-admin-demo');
 
     httpClient.get('/api/demo/cards').subscribe();
     const reqDemo = httpMock.expectOne('/api/demo/cards');
-    expect(reqDemo.request.headers.has('Authorization')).toBeFalse();
+    expect(reqDemo.request.headers.get('Authorization')).toBe('Bearer mon-token-admin-demo');
     reqDemo.flush([]);
   });
 
@@ -65,5 +69,30 @@ describe('authInterceptor', () => {
     const req = httpMock.expectOne('/api/validations');
     expect(req.request.headers.has('Authorization')).toBeFalse();
     req.flush({});
+  });
+
+  it('devrait injecter le Bearer token de borne sur /api/dashboard/summary et /api/simulator/cards sans exiger de token admin', () => {
+    session.clearTokens();
+    session.setTerminalToken('mon-token-borne-operateur');
+
+    httpClient.get('/api/dashboard/summary').subscribe();
+    const reqDash = httpMock.expectOne('/api/dashboard/summary');
+    expect(reqDash.request.headers.get('Authorization')).toBe('Bearer mon-token-borne-operateur');
+    reqDash.flush({});
+
+    httpClient.get('/api/simulator/cards').subscribe();
+    const reqSim = httpMock.expectOne('/api/simulator/cards');
+    expect(reqSim.request.headers.get('Authorization')).toBe('Bearer mon-token-borne-operateur');
+    reqSim.flush([]);
+  });
+
+  it('ne devrait jamais injecter de jeton sur /metrics depuis le navigateur', () => {
+    session.setAdminToken('mon-token-admin-456');
+    session.setTerminalToken('mon-token-borne-123');
+
+    httpClient.get('/metrics').subscribe();
+    const reqMetrics = httpMock.expectOne('/metrics');
+    expect(reqMetrics.request.headers.has('Authorization')).toBeFalse();
+    reqMetrics.flush('');
   });
 });
