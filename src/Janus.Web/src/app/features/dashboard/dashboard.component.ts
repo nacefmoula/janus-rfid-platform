@@ -6,7 +6,6 @@ import { JanusApiService } from '../../core/services/api.service';
 import { SessionService, UserRole } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
 import { PrometheusMetricsSummary, ApiHealth } from '../../core/models/health.model';
-import { TransitCard } from '../../core/models/card.model';
 import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
 
 @Component({
@@ -26,7 +25,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   readonly metrics = signal<PrometheusMetricsSummary | null>(null);
   readonly health = signal<ApiHealth | null>(null);
-  readonly cards = signal<TransitCard[]>([]);
 
   private sessionSub?: Subscription;
   private healthSub?: Subscription;
@@ -49,7 +47,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.healthSub?.unsubscribe();
     this.summarySub?.unsubscribe();
     this.metrics.set(null);
-    this.cards.set([]);
     this.errorMessage.set(null);
     if (role === 'ANONYMOUS') {
       this.isLoading.set(false);
@@ -108,18 +105,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   get activeCardsCount(): number {
-    return this.metrics()?.activeCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'ACTIVE').length;
+    return this.metrics()?.activeCardsCount ?? 0;
   }
 
   get revokedCardsCount(): number {
-    return this.metrics()?.revokedCardsCount ?? this.cards().filter(c => c.status.toString().toUpperCase() === 'REVOKED').length;
+    return this.metrics()?.revokedCardsCount ?? 0;
   }
 
   get totalCardsCount(): number {
-    return this.metrics()?.totalCardsCount ?? this.cards().length;
+    return this.metrics()?.totalCardsCount ?? 0;
   }
 
   get totalCirculatingBalanceMillimes(): number {
-    return this.metrics()?.totalCirculatingBalanceMillimes ?? this.cards().reduce((sum, c) => sum + (c.balanceMillimes || 0), 0);
+    return this.metrics()?.totalCirculatingBalanceMillimes ?? 0;
   }
 }
