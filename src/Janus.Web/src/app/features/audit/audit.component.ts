@@ -32,7 +32,9 @@ export class AuditComponent implements OnInit, OnDestroy {
   private auditSub?: Subscription;
 
   ngOnInit(): void {
-    this.loadCards();
+    if (this.session.activeRole() === 'ADMIN') {
+      this.loadCards();
+    }
     this.sessionSub = this.session.sessionChanges$.subscribe((role) => {
       this.onSessionChanged(role);
     });
@@ -55,12 +57,15 @@ export class AuditComponent implements OnInit, OnDestroy {
     this.selectedUid.set('');
     this.isLoading.set(false);
 
-    if (role !== 'ANONYMOUS') {
+    if (role === 'ADMIN') {
       this.loadCards();
     }
   }
 
   loadCards(): void {
+    if (this.session.activeRole() !== 'ADMIN') {
+      return;
+    }
     this.cardsSub?.unsubscribe();
     const expectedVersion = this.session.sessionVersion();
 
@@ -83,6 +88,9 @@ export class AuditComponent implements OnInit, OnDestroy {
   }
 
   fetchAuditLogs(): void {
+    if (this.session.activeRole() !== 'ADMIN') {
+      return;
+    }
     const uid = this.selectedUid().trim();
     if (!uid) return;
 

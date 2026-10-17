@@ -155,8 +155,13 @@ export class CardsComponent implements OnInit, OnDestroy {
 
   /**
    * Ouvre la modale d'édition / recharge administrative.
+   * Requiert STRICTEMENT le rôle actif Administrateur.
    */
   openEditModal(card: TransitCard): void {
+    if (this.session.activeRole() !== 'ADMIN') {
+      this.notification.warning('Accès restreint', 'Le rôle Administrateur est requis pour modifier ou recharger une carte.');
+      return;
+    }
     this.targetCardUid = card.uid;
     this.editLabel = card.label;
     this.editBalanceMillimes = card.balanceMillimes ?? 0;
@@ -183,6 +188,11 @@ export class CardsComponent implements OnInit, OnDestroy {
    * Requiert STRICTEMENT les droits Admin.
    */
   submitCardUpdate(): void {
+    if (this.session.activeRole() !== 'ADMIN') {
+      this.notification.warning('Accès restreint', 'Le rôle Administrateur est requis pour soumettre des modifications.');
+      this.closeEditModal();
+      return;
+    }
     if (!this.targetCardUid) return;
 
     if (this.editBalanceMillimes < 0) {

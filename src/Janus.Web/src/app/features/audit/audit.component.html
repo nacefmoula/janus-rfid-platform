@@ -12,34 +12,58 @@
     </div>
     <div class="rbac-status-tag">
       <span class="tag-label">CONTRÔLE SERVEUR RBAC :</span>
-      <span class="tag-val" [ngClass]="session.hasAdminAuth() ? 'text-success' : 'text-danger'">
-        {{ session.hasAdminAuth() ? 'Jeton Admin configuré' : 'Jeton Admin manquant (403 attendu)' }}
+      <span class="tag-val" [ngClass]="session.activeRole() === 'ADMIN' ? 'text-success' : 'text-danger'">
+        {{ session.activeRole() === 'ADMIN' ? 'Accès Administrateur actif' : (session.activeRole() === 'TERMINAL' ? 'Opérateur Borne (403 interdit)' : 'Visiteur non authentifié (401)') }}
       </span>
     </div>
   </div>
 
-  <!-- Barre de sélection de la carte -->
-  <div class="card-panel select-toolbar">
-    <div class="select-group">
-      <label class="form-label" for="auditCardSelect">Sélectionner la carte à inspecter :</label>
-      <div class="select-row">
-        <select
-          id="auditCardSelect"
-          class="form-select"
-          [ngModel]="selectedUid()"
-          (ngModelChange)="onCardSelected($event)">
-          @for (c of demoCards(); track c.uid) {
-            <option [value]="c.uid">
-              {{ c.uid }} — {{ c.label }} ({{ c.balanceMillimes | millimes }})
-            </option>
-          }
-        </select>
-        <button type="button" class="btn btn-primary" (click)="fetchAuditLogs()" [disabled]="isLoading() || !selectedUid()">
-          Consulter l'audit
-        </button>
+  @if (session.activeRole() !== 'ADMIN') {
+    <!-- Barrière visuelle d'autorisation RBAC -->
+    <div class="card-panel rbac-barrier-panel">
+      <div class="barrier-content">
+        <span class="barrier-icon" aria-hidden="true">🛡️</span>
+        <div class="barrier-text">
+          <h3>Accès restreint au profil Administrateur</h3>
+          <p>
+            La consultation des pistes d'audit immuables (<code>CardAuditLogs</code>) et de l'historique des modifications d'usagers exige strictement le rôle <strong>Administrateur</strong> (politique backend <code>AuditRead</code>).
+          </p>
+          <div class="barrier-role-info">
+            Profil actif actuel :
+            <strong class="role-highlight">
+              {{ session.activeRole() === 'TERMINAL' ? 'Opérateur Borne' : 'Visiteur (Anonyme)' }}
+            </strong>
+          </div>
+          <p class="barrier-hint">
+            Pour accéder aux journaux d'audit, ouvrez le panneau <strong>« Session & Rôles »</strong> dans l'en-tête, configurez un jeton administrateur valide et sélectionnez le rôle <strong>Administrateur</strong>.
+          </p>
+        </div>
       </div>
     </div>
-  </div>
+  } @else {
+    <!-- Barre de sélection de la carte -->
+    <div class="card-panel select-toolbar">
+      <div class="select-group">
+        <label class="form-label" for="auditCardSelect">Sélectionner la carte à inspecter :</label>
+        <div class="select-row">
+          <select
+            id="auditCardSelect"
+            class="form-select"
+            [ngModel]="selectedUid()"
+            (ngModelChange)="onCardSelected($event)">
+            @for (c of demoCards(); track c.uid) {
+              <option [value]="c.uid">
+                {{ c.uid }} — {{ c.label }} ({{ c.balanceMillimes | millimes }})
+              </option>
+            }
+          </select>
+          <button type="button" class="btn btn-primary" (click)="fetchAuditLogs()" [disabled]="isLoading() || !selectedUid()">
+            Consulter l'audit
+          </button>
+        </div>
+      </div>
+    </div>
+  }
 
   <!-- MESSAGE DE REFUS RBAC / AUTHENTIFICATION -->
   @if (rbacError()) {

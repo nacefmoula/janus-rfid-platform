@@ -56,6 +56,56 @@
   font-weight: 700;
 }
 
+/* Barrière RBAC */
+.rbac-barrier-panel {
+  padding: 32px 24px;
+  background-color: #FFFFFF;
+}
+.barrier-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.barrier-icon {
+  font-size: 2.2rem;
+  line-height: 1;
+  background-color: var(--color-purple-bg);
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+.barrier-text h3 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-text-main);
+  margin-bottom: 8px;
+}
+.barrier-text p {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.barrier-role-info {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  margin-bottom: 12px;
+  display: inline-block;
+}
+.role-highlight {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+.barrier-hint {
+  font-size: 0.8125rem;
+  color: var(--color-text-dim);
+}
+
 /* Sélection */
 .select-toolbar {
   padding: 16px 20px;

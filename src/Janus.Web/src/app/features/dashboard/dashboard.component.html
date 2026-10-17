@@ -20,6 +20,17 @@
     </div>
   </div>
 
+  <!-- Message d'attente pour rôle Visiteur Anonyme -->
+  @if (session.activeRole() === 'ANONYMOUS') {
+    <div class="anonymous-session-banner">
+      <span class="banner-icon" aria-hidden="true">🔒</span>
+      <div class="banner-content">
+        <strong>Session requise pour les indicateurs d'exploitation :</strong>
+        <span>Le profil actif est actuellement <em>Visiteur (Anonyme)</em>. Cliquez sur <strong>« Session & Rôles »</strong> dans l'en-tête pour configurer un jeton de démonstration (Opérateur Borne ou Administrateur) et déverrouiller la synthèse d'exploitation.</span>
+      </div>
+    </div>
+  }
+
   <!-- Message d'erreur éventuel -->
   @if (errorMessage()) {
     <div class="error-banner">

@@ -237,3 +237,11 @@
 .text-muted { color: var(--color-text-muted); }
 .text-center { text-align: center; }
 .py-4 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+
+.btn-disabled-role {
+  opacity: 0.55;
+  cursor: not-allowed !important;
+  background-color: var(--bg-surface-subtle);
+  color: var(--color-text-dim);
+  border-color: var(--border-light);
+}

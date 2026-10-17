@@ -60,14 +60,55 @@ describe('AuditComponent', () => {
     fixture.detectChanges();
   });
 
-  it('devrait initialiser le composant et charger les journaux d\'audit de la première carte', () => {
+  it('devrait bloquer les requêtes et afficher l\'écran de verrouillage RBAC en mode ANONYMOUS', () => {
     expect(component).toBeTruthy();
-    expect(apiSpy.getDemoCards).toHaveBeenCalled();
-    expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6');
-    expect(component.auditData()).toEqual(mockAuditResponse);
+    expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
+    expect(apiSpy.getCardAudit).not.toHaveBeenCalled();
+    expect(component.auditData()).toBeNull();
+
+    const barrier = fixture.nativeElement.querySelector('.rbac-barrier-panel');
+    expect(barrier).toBeTruthy();
+    expect(barrier.textContent).toContain('Visiteur (Anonyme)');
+
+    const tagVal = fixture.nativeElement.querySelector('.rbac-status-tag .tag-val');
+    expect(tagVal?.textContent).toContain('Visiteur non authentifié (401)');
   });
 
-  it('devrait afficher l\'erreur RBAC 403 lorsque les droits administrateur sont refusés sans émettre de double toast composant', () => {
+  it('devrait bloquer les requêtes et afficher la barrière RBAC adaptée en mode TERMINAL', () => {
+    component.session.setTerminalToken('token-borne-123');
+    fixture.detectChanges();
+
+    expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
+    expect(apiSpy.getCardAudit).not.toHaveBeenCalled();
+    expect(component.auditData()).toBeNull();
+
+    const barrier = fixture.nativeElement.querySelector('.rbac-barrier-panel');
+    expect(barrier).toBeTruthy();
+    expect(barrier.textContent).toContain('Opérateur Borne');
+
+    const tagVal = fixture.nativeElement.querySelector('.rbac-status-tag .tag-val');
+    expect(tagVal?.textContent).toContain('Opérateur Borne (403 interdit)');
+  });
+
+  it('devrait charger les cartes et l\'audit de la première carte en mode ADMIN et déverrouiller la vue', () => {
+    component.session.setAdminToken('valid-admin-token');
+    fixture.detectChanges();
+
+    expect(apiSpy.getDemoCards).toHaveBeenCalledTimes(1);
+    expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6');
+    expect(component.auditData()).toEqual(mockAuditResponse);
+
+    const barrier = fixture.nativeElement.querySelector('.rbac-barrier-panel');
+    expect(barrier).toBeFalsy();
+
+    const tagVal = fixture.nativeElement.querySelector('.rbac-status-tag .tag-val');
+    expect(tagVal?.textContent).toContain('Accès Administrateur actif');
+  });
+
+  it('devrait afficher l\'erreur RBAC 403 lorsque l\'API refuse l\'accès sans émettre de double toast composant', () => {
+    component.session.setAdminToken('valid-admin-token');
+    fixture.detectChanges();
+
     apiSpy.getCardAudit.and.returnValue(throwError(() => ({
       status: 403,
       error: { error: 'forbidden', message: 'Terminal credentials cannot view administrative audit logs.' }
@@ -82,7 +123,9 @@ describe('AuditComponent', () => {
     expect(notification.toasts().length).toBe(0);
   });
 
-  it('6, 7 & 8. purge les journaux d\'audit lors de clearTokens() et ignore toute réponse tardive de l\'ancienne session', () => {
+  it('purge les journaux d\'audit lors de clearTokens() et ignore toute réponse tardive de l\'ancienne session', () => {
+    component.session.setAdminToken('valid-admin-token');
+    fixture.detectChanges();
     expect(component.auditData()).not.toBeNull();
 
     const delayedAudit$ = new Subject<CardAuditResponse>();
@@ -92,9 +135,12 @@ describe('AuditComponent', () => {
     expect(component.isLoading()).toBeTrue();
 
     component.session.clearTokens();
+    fixture.detectChanges();
+
     expect(component.auditData()).toBeNull();
     expect(component.demoCards()).toEqual([]);
     expect(component.isLoading()).toBeFalse();
+    expect(fixture.nativeElement.querySelector('.rbac-barrier-panel')).toBeTruthy();
 
     // L'ancienne requête d'audit termine après la déconnexion : elle ne doit pas réafficher les données
     delayedAudit$.next(mockAuditResponse);

@@ -63,10 +63,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.summarySub?.unsubscribe();
 
     const expectedVersion = this.session.sessionVersion();
-    this.isLoading.set(true);
     this.errorMessage.set(null);
 
-    // Charge en parallèle la santé et la synthèse métier (/api/dashboard/summary)
+    // Charge en parallèle la santé de l'API (accessible publiquement)
     this.healthSub = this.api.getHealth().subscribe({
       next: (h) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
@@ -77,6 +76,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.health.set({ status: 'unreachable', service: 'janus-api' });
       }
     });
+
+    // En mode ANONYMOUS, n'émet aucun appel vers /api/dashboard/summary (réservé aux rôles Terminal et Admin)
+    if (this.session.activeRole() === 'ANONYMOUS') {
+      this.metrics.set(null);
+      this.isLoading.set(false);
+      return;
+    }
+
+    this.isLoading.set(true);
 
     this.summarySub = this.api.getMetricsSummary().subscribe({
       next: (m) => {
