@@ -49,6 +49,23 @@ public class SecurityHardeningTests : IAsyncLifetime
         return uid;
     }
 
+    private async Task RecordValidationSampleAsync(string cardUid)
+    {
+        using var validationReq = new HttpRequestMessage(HttpMethod.Post, "/api/validations")
+        {
+            Content = JsonContent.Create(new
+            {
+                eventId = Guid.NewGuid(),
+                cardUid,
+                occurredAt = DateTimeOffset.UtcNow,
+                eventType = "TRANSPORT_VALIDATION"
+            })
+        };
+        validationReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", TerminalToken);
+        var validationResp = await _client.SendAsync(validationReq);
+        Assert.Equal(HttpStatusCode.OK, validationResp.StatusCode);
+    }
+
     [Fact]
     public async Task SEC01_DemoCards_AnonymousCall_Returns401Unauthorized()
     {
@@ -200,6 +217,9 @@ public class SecurityHardeningTests : IAsyncLifetime
     [Fact]
     public async Task SEC05_Metrics_Anonymous_Returns401_Terminal_Returns403_Admin_Returns200()
     {
+        var cardUid = await PrepareCardAsync(5000);
+        await RecordValidationSampleAsync(cardUid);
+
         // 1. Anonymous request to /metrics -> 401 Unauthorized
         var anonResp = await _client.GetAsync("/metrics");
         Assert.Equal(HttpStatusCode.Unauthorized, anonResp.StatusCode);
@@ -223,6 +243,7 @@ public class SecurityHardeningTests : IAsyncLifetime
     public async Task REV01_ScraperRole_CanAccessMetrics_ButCannotAccessCardsAuditAdminValidationOrDashboard()
     {
         var cardUid = await PrepareCardAsync(4000);
+        await RecordValidationSampleAsync(cardUid);
 
         // 1. Scraper token to /metrics -> 200 OK
         using var metricsReq = new HttpRequestMessage(HttpMethod.Get, "/metrics");
