@@ -1,17 +1,18 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { CardsComponent } from './cards.component';
 import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { NotificationService } from '../../core/services/notification.service';
-import { CardDetail } from '../../core/models/card.model';
+import { CardDetail, TransitCard } from '../../core/models/card.model';
 
 describe('CardsComponent', () => {
   let component: CardsComponent;
   let fixture: ComponentFixture<CardsComponent>;
   let apiSpy: jasmine.SpyObj<JanusApiService>;
+  let notification: NotificationService;
 
   const mockCards = [
     { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte Usager Régulier', balanceMillimes: 10000 },
@@ -41,6 +42,7 @@ describe('CardsComponent', () => {
 
     fixture = TestBed.createComponent(CardsComponent);
     component = fixture.componentInstance;
+    notification = TestBed.inject(NotificationService);
     fixture.detectChanges();
   });
 
@@ -50,12 +52,11 @@ describe('CardsComponent', () => {
     expect(component.cards().length).toBe(2);
   });
 
-  it('devrait utiliser getSimulatorCards lorsque le rôle authentifié est TERMINAL sans appeler getDemoCards', () => {
+  it('7. devrait rafraîchir automatiquement via getSimulatorCards lorsque la session passe à TERMINAL sans appeler getDemoCards', () => {
     apiSpy.getDemoCards.calls.reset();
     apiSpy.getSimulatorCards.calls.reset();
 
     component.session.setTerminalToken('valid-terminal-session-token');
-    component.loadCards();
 
     expect(apiSpy.getSimulatorCards).toHaveBeenCalledTimes(1);
     expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
@@ -63,16 +64,30 @@ describe('CardsComponent', () => {
     expect(component.cards()[0].balanceMillimes).toBeUndefined();
   });
 
-  it('devrait utiliser getDemoCards lorsque le rôle authentifié est ADMIN', () => {
+  it('7. devrait rafraîchir automatiquement via getDemoCards lorsque la session passe à ADMIN', () => {
     apiSpy.getDemoCards.calls.reset();
     apiSpy.getSimulatorCards.calls.reset();
 
     component.session.setAdminToken('valid-admin-session-token');
-    component.loadCards();
 
     expect(apiSpy.getDemoCards).toHaveBeenCalledTimes(1);
     expect(apiSpy.getSimulatorCards).not.toHaveBeenCalled();
     expect(component.cards()[0].balanceMillimes).toBe(10000);
+  });
+
+  it('ne devrait pas déclencher la route terminale getSimulatorCards en rôle ANONYMOUS même si un jeton terminal réside encore en mémoire', () => {
+    component.session.configureSession({
+      terminalToken: 'residual-terminal-token',
+      adminToken: null,
+      role: 'ANONYMOUS'
+    });
+    apiSpy.getDemoCards.calls.reset();
+    apiSpy.getSimulatorCards.calls.reset();
+
+    component.loadCards();
+
+    expect(apiSpy.getSimulatorCards).not.toHaveBeenCalled();
+    expect(apiSpy.getDemoCards).toHaveBeenCalledTimes(1);
   });
 
   it('devrait filtrer les cartes par UID ou libellé de recherche', () => {
@@ -144,5 +159,65 @@ describe('CardsComponent', () => {
       reason: 'Recharge guichet centrale 5 TND'
     });
     expect(component.showEditModal()).toBeFalse();
+  });
+
+  it('6. clearTokens() vide les cartes chargées et ferme les modales de détail et d\'édition', () => {
+    const mockDetail: CardDetail = {
+      uid: '04A1B2C3D4E5F6',
+      status: 'Active',
+      label: 'Carte Usager Régulier',
+      balanceMillimes: 10000,
+      transactionsCount: 0,
+      limit: 50,
+      offset: 0,
+      transactions: []
+    };
+    apiSpy.getCard.and.returnValue(of(mockDetail));
+
+    component.openCardDetail(mockCards[0]);
+    component.openEditModal(mockCards[0]);
+    expect(component.selectedCardDetail()).not.toBeNull();
+    expect(component.showEditModal()).toBeTrue();
+    expect(component.cards().length).toBe(2);
+
+    component.session.clearTokens();
+
+    expect(component.cards()).toEqual([]);
+    expect(component.selectedCardDetail()).toBeNull();
+    expect(component.showEditModal()).toBeFalse();
+    expect(component.targetCardUid).toBe('');
+  });
+
+  it('8. une réponse tardive issue d\'une ancienne session n\'écrase pas le nouvel état', () => {
+    const delayedAdminCards$ = new Subject<TransitCard[]>();
+    apiSpy.getDemoCards.and.returnValue(delayedAdminCards$.asObservable());
+
+    // Déclenche une requête en cours sous l'ancienne session
+    component.loadCards();
+    expect(component.isLoading()).toBeTrue();
+
+    // Changement de session vers ANONYMOUS avant la réponse
+    component.session.clearTokens();
+    expect(component.cards()).toEqual([]);
+    expect(component.isLoading()).toBeFalse();
+
+    // L'ancienne réponse arrive enfin : elle doit être ignorée
+    delayedAdminCards$.next(mockCards);
+    expect(component.cards()).toEqual([]);
+  });
+
+  it('10. n\'émet pas de toast d\'erreur en doublon depuis le composant lors d\'un échec upsertCard', () => {
+    apiSpy.upsertCard.and.returnValue(throwError(() => ({
+      status: 403,
+      error: { error: 'Accès refusé' }
+    })));
+
+    component.openEditModal(mockCards[0]);
+    component.editReason = 'Test erreur 403';
+    component.submitCardUpdate();
+
+    expect(component.isSubmitting()).toBeFalse();
+    // Le toast global est géré par errorInterceptor, le composant ne doit pas en émettre un second
+    expect(notification.toasts().length).toBe(0);
   });
 });

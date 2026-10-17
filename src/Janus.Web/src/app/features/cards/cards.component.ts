@@ -1,6 +1,7 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { NotificationService } from '../../core/services/notification.service';
@@ -15,7 +16,7 @@ import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
   templateUrl: './cards.component.html',
   styleUrls: ['./cards.component.css']
 })
-export class CardsComponent implements OnInit {
+export class CardsComponent implements OnInit, OnDestroy {
   private readonly api = inject(JanusApiService);
   readonly session = inject(SessionService);
   private readonly notification = inject(NotificationService);
@@ -40,27 +41,65 @@ export class CardsComponent implements OnInit {
   editStatus: CardStatus = 'Active';
   editReason = '';
 
+  private sessionSub?: Subscription;
+  private cardsSub?: Subscription;
+  private detailSub?: Subscription;
+  private updateSub?: Subscription;
+
   ngOnInit(): void {
     this.loadCards();
+    this.sessionSub = this.session.sessionChanges$.subscribe((role) => {
+      this.onSessionChanged(role);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.sessionSub?.unsubscribe();
+    this.cardsSub?.unsubscribe();
+    this.detailSub?.unsubscribe();
+    this.updateSub?.unsubscribe();
+  }
+
+  private onSessionChanged(role: string): void {
+    this.cardsSub?.unsubscribe();
+    this.detailSub?.unsubscribe();
+    this.updateSub?.unsubscribe();
+
+    // Purge immédiate des données potentiellement sensibles et fermeture des modales
+    this.cards.set([]);
+    this.selectedCardDetail.set(null);
+    this.isLoadingDetail.set(false);
+    this.showEditModal.set(false);
+    this.isSubmitting.set(false);
+    this.isLoading.set(false);
+    this.targetCardUid = '';
+    this.editReason = '';
+
+    if (role !== 'ANONYMOUS') {
+      this.loadCards();
+    }
   }
 
   loadCards(): void {
+    this.cardsSub?.unsubscribe();
+    const expectedVersion = this.session.sessionVersion();
     this.isLoading.set(true);
-    const useTerminalCompatibleRoute =
-      this.session.activeRole() === 'TERMINAL' ||
-      (this.session.hasTerminalAuth() && !this.session.hasAdminAuth());
+
+    const useTerminalCompatibleRoute = this.session.activeRole() === 'TERMINAL';
     const request$ = useTerminalCompatibleRoute
       ? this.api.getSimulatorCards()
       : this.api.getDemoCards();
 
-    request$.subscribe({
+    this.cardsSub = request$.subscribe({
       next: (data) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.cards.set(data);
         this.isLoading.set(false);
       },
       error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
+        this.cards.set([]);
         this.isLoading.set(false);
-        this.notification.error('Erreur inventaire', 'Impossible de charger la liste des cartes depuis l\'API.');
       }
     });
   }
@@ -81,15 +120,19 @@ export class CardsComponent implements OnInit {
    * Requiert un token (Terminal ou Admin).
    */
   openCardDetail(card: TransitCard): void {
+    this.detailSub?.unsubscribe();
+    const expectedVersion = this.session.sessionVersion();
     this.isLoadingDetail.set(true);
-    this.api.getCard(card.uid).subscribe({
+
+    this.detailSub = this.api.getCard(card.uid).subscribe({
       next: (detail) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.selectedCardDetail.set(detail);
         this.isLoadingDetail.set(false);
       },
-      error: (err) => {
+      error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.isLoadingDetail.set(false);
-        // Si non autorisé ou 404, on affiche les données de base connues
         this.selectedCardDetail.set({
           uid: card.uid,
           status: card.status,
@@ -100,14 +143,13 @@ export class CardsComponent implements OnInit {
           offset: 0,
           transactions: []
         });
-        if (err.status === 401) {
-          this.notification.warning('Accès restreint (401)', 'Un jeton de borne ou administrateur est requis pour consulter l\'historique des débits.');
-        }
       }
     });
   }
 
   closeCardDetail(): void {
+    this.detailSub?.unsubscribe();
+    this.isLoadingDetail.set(false);
     this.selectedCardDetail.set(null);
   }
 
@@ -124,6 +166,8 @@ export class CardsComponent implements OnInit {
   }
 
   closeEditModal(): void {
+    this.updateSub?.unsubscribe();
+    this.isSubmitting.set(false);
     this.showEditModal.set(false);
   }
 
@@ -151,6 +195,8 @@ export class CardsComponent implements OnInit {
       return;
     }
 
+    this.updateSub?.unsubscribe();
+    const expectedVersion = this.session.sessionVersion();
     this.isSubmitting.set(true);
     const body: CardUpsertRequest = {
       label: this.editLabel.trim() || undefined,
@@ -159,8 +205,9 @@ export class CardsComponent implements OnInit {
       reason: this.editReason.trim()
     };
 
-    this.api.upsertCard(this.targetCardUid, body).subscribe({
+    this.updateSub = this.api.upsertCard(this.targetCardUid, body).subscribe({
       next: (updatedCard) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.isSubmitting.set(false);
         this.showEditModal.set(false);
         this.notification.success('Carte mise à jour', `La carte ${updatedCard.uid} a été actualisée avec succès.`);
@@ -171,15 +218,9 @@ export class CardsComponent implements OnInit {
           this.openCardDetail(updatedCard);
         }
       },
-      error: (err) => {
+      error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.isSubmitting.set(false);
-        if (err.status === 403) {
-          this.notification.error('Opération refusée (403)', 'Un jeton de borne ne peut pas effectuer d\'actes administratifs. Veuillez renseigner le jeton Administrateur.');
-        } else if (err.status === 401) {
-          this.notification.error('Authentification requise (401)', 'Jeton administrateur manquant ou invalide.');
-        } else {
-          this.notification.error('Échec de mise à jour', err.error?.message || 'Erreur lors de la mise à jour.');
-        }
       }
     });
   }

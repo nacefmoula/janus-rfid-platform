@@ -1,6 +1,7 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { ValidationSessionService } from '../../core/services/validation-session.service';
@@ -17,7 +18,7 @@ import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
   templateUrl: './simulator.component.html',
   styleUrls: ['./simulator.component.css']
 })
-export class SimulatorComponent implements OnInit {
+export class SimulatorComponent implements OnInit, OnDestroy {
   private readonly api = inject(JanusApiService);
   readonly session = inject(SessionService);
   readonly validationSession = inject(ValidationSessionService);
@@ -40,14 +41,49 @@ export class SimulatorComponent implements OnInit {
   // État du solde avant validation (renseigné si disponible)
   readonly balanceBefore = signal<number | null>(null);
 
+  private sessionSub?: Subscription;
+  private cardsSub?: Subscription;
+  private validationSub?: Subscription;
+
   ngOnInit(): void {
     this.loadDemoCards();
+    this.sessionSub = this.session.sessionChanges$.subscribe((role) => {
+      this.onSessionChanged(role);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.sessionSub?.unsubscribe();
+    this.cardsSub?.unsubscribe();
+    this.validationSub?.unsubscribe();
+  }
+
+  private onSessionChanged(role: string): void {
+    this.cardsSub?.unsubscribe();
+    this.validationSub?.unsubscribe();
+
+    this.demoCards.set([]);
+    this.selectedUid = '';
+    this.currentResult.set(null);
+    this.currentError.set(null);
+    this.lastRequestSent.set(null);
+    this.balanceBefore.set(null);
+    this.loadingCards.set(false);
+    this.isProcessing.set(false);
+
+    if (role !== 'ANONYMOUS') {
+      this.loadDemoCards();
+    }
   }
 
   loadDemoCards(): void {
+    this.cardsSub?.unsubscribe();
+    const expectedVersion = this.session.sessionVersion();
     this.loadingCards.set(true);
-    this.api.getSimulatorCards().subscribe({
+
+    this.cardsSub = this.api.getSimulatorCards().subscribe({
       next: (cards) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         this.demoCards.set(cards);
         this.loadingCards.set(false);
         if (cards.length > 0 && !this.selectedUid) {
@@ -56,8 +92,9 @@ export class SimulatorComponent implements OnInit {
         }
       },
       error: () => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
+        this.demoCards.set([]);
         this.loadingCards.set(false);
-        this.notification.error('Erreur chargement cartes', 'Impossible de récupérer les cartes du simulateur (vérifiez votre jeton Borne ou Admin).');
       }
     });
   }
@@ -128,6 +165,7 @@ export class SimulatorComponent implements OnInit {
 
   /**
    * Scénario 4 : Test sans jeton de borne (Démonstration du contrôle de sécurité 401).
+   * Utilise un bypass de contexte strictement limité à cette requête sans altérer SessionService.
    */
   simulateUnauthorized(): void {
     const uid = this.effectiveUid;
@@ -139,21 +177,16 @@ export class SimulatorComponent implements OnInit {
       eventType: 'TRANSPORT_VALIDATION'
     };
 
-    // Sauvegarde temporaire du jeton pour restauration immédiate
-    const savedToken = this.session.terminalToken();
-    this.session.setTerminalToken(null);
-
-    this.executeValidationRequest(request, 'UNAUTHORIZED', () => {
-      // Restauration du jeton
-      this.session.setTerminalToken(savedToken);
-    });
+    this.executeValidationRequest(request, 'UNAUTHORIZED');
   }
 
   private executeValidationRequest(
     request: ValidationRequest,
-    scenario: SimulatedValidationSessionEntry['scenario'],
-    onComplete?: () => void
+    scenario: SimulatedValidationSessionEntry['scenario']
   ): void {
+    this.validationSub?.unsubscribe();
+    const expectedVersion = this.session.sessionVersion();
+
     this.isProcessing.set(true);
     this.currentResult.set(null);
     this.currentError.set(null);
@@ -166,9 +199,13 @@ export class SimulatorComponent implements OnInit {
     }
 
     const start = performance.now();
+    const requestOptions = scenario === 'UNAUTHORIZED'
+      ? { skipAuth: true, skipErrorToast: true }
+      : { skipErrorToast: true };
 
-    this.api.validate(request).subscribe({
+    this.validationSub = this.api.validate(request, requestOptions).subscribe({
       next: (res) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         const duration = Math.round(performance.now() - start);
         this.lastDurationMs.set(duration);
         this.currentResult.set(res);
@@ -186,10 +223,9 @@ export class SimulatorComponent implements OnInit {
 
         // Actualise la liste des cartes pour synchroniser le nouveau solde
         this.loadDemoCards();
-
-        if (onComplete) onComplete();
       },
       error: (err) => {
+        if (this.session.sessionVersion() !== expectedVersion) return;
         const duration = Math.round(performance.now() - start);
         this.lastDurationMs.set(duration);
         this.isProcessing.set(false);
@@ -209,8 +245,6 @@ export class SimulatorComponent implements OnInit {
           durationMs: duration,
           scenario
         });
-
-        if (onComplete) onComplete();
       }
     });
   }

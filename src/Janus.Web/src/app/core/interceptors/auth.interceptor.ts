@@ -1,35 +1,37 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpContextToken, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { SessionService } from '../services/session.service';
 
 /**
- * Intercepteur d'authentification Bearer contextuel.
- * Injecte le token approprié selon la ressource ciblée :
- * - /api/validations -> Jeton Borne / Terminal
- * - /api/cards/{uid}/audit, PUT /api/cards/{uid} et /api/demo/cards -> Jeton Administrateur
- * - GET /api/cards/{uid}, /api/simulator/cards et /api/dashboard/summary -> Jeton effectif (Terminal ou Admin)
- * Aucun secret de scraping (/metrics) n'est détenu ni transmis par le navigateur.
+ * Jetons de contexte / en-tête interne permettant d'omettre volontairement l'authentification
+ * sur une requête isolée (ex: scénario de test 401 du simulateur RFID) sans modifier SessionService.
+ */
+export const SKIP_AUTH_CONTEXT = new HttpContextToken<boolean>(() => false);
+export const SKIP_AUTH_HEADER = 'X-Skip-Auth';
+
+/**
+ * Intercepteur d'authentification Bearer gouverné strictement par le rôle actif :
+ * - ANONYMOUS : aucun en-tête Authorization transmis.
+ * - TERMINAL  : uniquement le jeton Terminal (permettant notamment d'obtenir un vrai 403 Forbidden backend sur les routes AdminOnly).
+ * - ADMIN     : uniquement le jeton Administrateur (n'envoie jamais accidentellement le jeton Terminal).
+ * - /health et /metrics : aucun jeton navigateur injecté.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const session = inject(SessionService);
 
-  // Endpoint public : pas d'en-tête nécessaire
-  if (req.url.endsWith('/health')) {
+  // Bypass explicite strictement borné à la requête courante (scénario de test 401 du simulateur).
+  // L'en-tête interne éventuel est supprimé avant l'envoi réseau.
+  if (req.context.get(SKIP_AUTH_CONTEXT) || req.headers.has(SKIP_AUTH_HEADER)) {
+    const cleanHeaders = req.headers.delete(SKIP_AUTH_HEADER).delete('Authorization');
+    return next(req.clone({ headers: cleanHeaders }));
+  }
+
+  // Endpoints publics ou de scraping interne : pas d'en-tête Authorization depuis le navigateur
+  if (req.url.endsWith('/health') || req.url.includes('/metrics') || !req.url.includes('/api/')) {
     return next(req);
   }
 
-  let token: string | null = null;
-
-  if (req.url.includes('/api/validations')) {
-    // Les validations de transport exigent un jeton de borne RFID
-    token = session.terminalToken() ?? (session.activeRole() === 'TERMINAL' ? session.getEffectiveToken(false) : null);
-  } else if (req.url.includes('/audit') || (req.method === 'PUT' && req.url.includes('/api/cards/')) || req.url.includes('/api/demo/cards')) {
-    // Les opérations strictement administratives exigent le jeton administrateur
-    token = session.adminToken() ?? (session.activeRole() === 'ADMIN' ? session.getEffectiveToken(true) : null);
-  } else if (req.url.includes('/api/cards/') || req.url.includes('/api/simulator/cards') || req.url.includes('/api/dashboard/summary')) {
-    // La consultation détaillée, le simulateur et le résumé dashboard acceptent un jeton borne ou admin
-    token = session.getEffectiveToken() ?? session.terminalToken() ?? session.adminToken();
-  }
+  const token = session.getEffectiveToken();
 
   if (token) {
     const cloned = req.clone({
