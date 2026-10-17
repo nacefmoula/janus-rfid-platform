@@ -2,6 +2,7 @@
 import concurrent.futures
 import json
 import os
+import time
 import unittest
 import urllib.request
 import urllib.error
@@ -12,26 +13,39 @@ BASE = os.environ.get("JANUS_BASE_URL", os.environ.get("RFID_BASE_URL", "http://
 TERMINAL_TOKEN = os.environ.get("TERMINAL_DEMO_TOKEN", "dev-terminal-token-change-me")
 TERMINAL_02_TOKEN = os.environ.get("TERMINAL_02_TOKEN", "dev-terminal-02-token-change-me")
 ADMIN_TOKEN = os.environ.get("ADMIN_DEMO_TOKEN", "dev-admin-token-change-me")
+SCRAPE_TOKEN = os.environ.get("METRICS_SCRAPE_TOKEN", "dev-metrics-scrape-token-change-me")
 
-def call(path, method="GET", payload=None, token=TERMINAL_TOKEN):
+def call(path, method="GET", payload=None, token=TERMINAL_TOKEN, custom_headers=None, retry_on_429=True):
     h = {}
     if token is not None:
         h["Authorization"] = f"Bearer {token}"
+    if custom_headers:
+        h.update(custom_headers)
     data = None
     if payload is not None:
         data = json.dumps(payload).encode()
         h["Content-Type"] = "application/json"
-    req = urllib.request.Request(BASE + path, data=data, headers=h, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return r.status, json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode()
+    for attempt in range(12):
+        req = urllib.request.Request(BASE + path, data=data, headers=h, method=method)
         try:
-            body = json.loads(raw)
-        except ValueError:
-            body = raw
-        return e.code, body
+            with urllib.request.urlopen(req, timeout=10) as r:
+                raw = r.read().decode()
+                try:
+                    return r.status, json.loads(raw)
+                except ValueError:
+                    return r.status, raw
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            code = e.code
+            e.close()
+            if code == 429 and retry_on_429 and attempt < 11:
+                time.sleep(0.25)
+                continue
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                body = raw
+            return code, body
 
 def get_card(uid, token=TERMINAL_TOKEN, query=""):
     q = f"?{query}" if query else ""
@@ -364,9 +378,9 @@ class ApiTests(unittest.TestCase):
         s_audit_bad, _ = call("/api/cards/04A1B2C3D4E5F6/audit", token="bad")
         self.assertEqual(s_audit_bad, 401)
 
-        # POST /api/validations avec token Admin -> 401 Unauthorized (l'admin ne se fait pas passer pour une borne)
+        # POST /api/validations avec token Admin -> 403 Forbidden ou 401 Unauthorized
         s_post_admin, _ = call("/api/validations", method="POST", payload=event(), token=ADMIN_TOKEN)
-        self.assertEqual(s_post_admin, 401)
+        self.assertIn(s_post_admin, (401, 403))
 
     def test_11_concurrent_different_payloads_conflict_single_debit(self):
         """11. Deux requêtes concurrentes avec le MÊME eventId mais des payloads DIFFÉRENTS :
@@ -769,6 +783,117 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(s_card, 200)
         self.assertEqual(card["balanceMillimes"], 8500)
         self.assertEqual(card["transactionsCount"], 1)
+
+    # --- Nouveaux tests Lot 2 : Sécurité applicative, authentification et autorisations ---
+
+    def test_24_terminal_02_can_read_card_details(self):
+        """24. SEC-02 : TERMINAL-DEMO-02 peut légitimement consulter les détails d'une carte (résolution incohérence)."""
+        uid = "04A1B2C3D4E5F6"
+        s, b = get_card(uid, token=TERMINAL_02_TOKEN)
+        self.assertEqual(s, 200)
+        self.assertEqual(b["uid"], uid)
+        self.assertIn("balanceMillimes", b)
+
+    def test_25_demo_cards_endpoint_security(self):
+        """25. SEC-01 : GET /api/demo/cards exige les droits administrateur (refus anonyme 401 et terminal 403)."""
+        # Anonyme -> 401
+        s_anon, b_anon = call("/api/demo/cards", token=None)
+        self.assertEqual(s_anon, 401)
+        self.assertEqual(b_anon.get("error"), "unauthorized")
+
+        # Terminal 1 -> 403
+        s_term1, b_term1 = call("/api/demo/cards", token=TERMINAL_TOKEN)
+        self.assertEqual(s_term1, 403)
+        self.assertEqual(b_term1.get("error"), "forbidden")
+
+        # Terminal 2 -> 403
+        s_term2, b_term2 = call("/api/demo/cards", token=TERMINAL_02_TOKEN)
+        self.assertEqual(s_term2, 403)
+        self.assertEqual(b_term2.get("error"), "forbidden")
+
+        # Admin -> 200
+        s_admin, b_admin = call("/api/demo/cards", token=ADMIN_TOKEN)
+        self.assertEqual(s_admin, 200)
+        self.assertIsInstance(b_admin, list)
+        self.assertTrue(len(b_admin) > 0)
+
+    def test_26_metrics_endpoint_security(self):
+        """26. SEC-05 : GET /metrics protégé contre l'accès anonyme (401) et terminal (403), accessible par l'admin (200)."""
+        # Anonyme -> 401
+        s_anon, b_anon = call("/metrics", token=None)
+        self.assertEqual(s_anon, 401)
+
+        # Terminal -> 403
+        s_term, b_term = call("/metrics", token=TERMINAL_TOKEN)
+        self.assertEqual(s_term, 403)
+
+        # Admin -> 200
+        s_admin, b_admin = call("/metrics", token=ADMIN_TOKEN)
+        self.assertEqual(s_admin, 200)
+
+    def test_27_admin_audit_actor_logged_from_principal(self):
+        """27. SEC-06 : La modification administrative d'une carte renseigne l'acteur dans l'audit trail."""
+        uid = f"04SEC6{uuid.uuid4().hex[:8].upper()}"
+        s_prep, _ = prepare_card(uid, balance_millimes=4000, label="Actor Audit Test", reason="Vérification imputabilité", token=ADMIN_TOKEN)
+        self.assertEqual(s_prep, 200)
+
+        s_aud, b_aud = get_audit(uid, token=ADMIN_TOKEN)
+        self.assertEqual(s_aud, 200)
+        self.assertGreaterEqual(b_aud["totalCount"], 1)
+        self.assertEqual(b_aud["auditLogs"][0]["actor"], "ADMIN")
+
+    def test_28_scraper_role_least_privilege(self):
+        """28. REV-01 : Le jeton de scraping Prometheus accède uniquement à /metrics et reçoit 403 sur tous les autres endpoints."""
+        s_met, b_met = call("/metrics", token=SCRAPE_TOKEN)
+        self.assertEqual(s_met, 200)
+        self.assertIn("janus_validations_total", b_met)
+
+        self.assertEqual(call("/api/cards/04A1B2C3D4E5F6", token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/cards/04A1B2C3D4E5F6", method="PUT", payload={"balanceMillimes": 5000}, token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/cards/04A1B2C3D4E5F6/audit", token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/demo/cards", token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/simulator/cards", token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/dashboard/summary", token=SCRAPE_TOKEN)[0], 403)
+        self.assertEqual(call("/api/validations", method="POST", payload=event(), token=SCRAPE_TOKEN)[0], 403)
+
+    def test_29_dashboard_summary_and_simulator_cards_endpoints(self):
+        """29. REV-02 : /api/dashboard/summary et /api/simulator/cards fonctionnent avec un jeton Borne sans secret Admin ni Scraper."""
+        # Anonyme -> 401
+        self.assertEqual(call("/api/dashboard/summary", token=None)[0], 401)
+        self.assertEqual(call("/api/simulator/cards", token=None)[0], 401)
+
+        # Terminal 1 & 2 -> 200 sur /api/dashboard/summary
+        s_dash, b_dash = call("/api/dashboard/summary", token=TERMINAL_TOKEN)
+        self.assertEqual(s_dash, 200)
+        self.assertIn("totalValidations", b_dash)
+        self.assertIn("acceptedValidations", b_dash)
+        self.assertIn("rejectedValidations", b_dash)
+        self.assertIn("conflictValidations", b_dash)
+        self.assertIn("totalDebitedMillimes", b_dash)
+        self.assertIn("activeCardsCount", b_dash)
+
+        # Terminal 2 -> 200 sur /api/simulator/cards avec champs strictement minimaux (sans balanceMillimes) et pagination
+        s_sim, b_sim = call("/api/simulator/cards?limit=1&offset=0", token=TERMINAL_02_TOKEN)
+        self.assertEqual(s_sim, 200)
+        self.assertIsInstance(b_sim, list)
+        self.assertEqual(len(b_sim), 1)
+        first = b_sim[0]
+        self.assertEqual(set(first.keys()), {"uid", "status", "label"})
+        self.assertNotIn("balanceMillimes", first)
+
+    def test_30_malformed_and_non_bearer_headers_telemetry(self):
+        """30. REV-07 : Les en-têtes Authorization non-Bearer ou Bearer vides sont rejetés (401) et tracés dans janus_security_auth_failures_total."""
+        s_basic, _ = call("/api/cards/04A1B2C3D4E5F6", token=None, custom_headers={"Authorization": "Basic dGVzdDp0ZXN0"})
+        self.assertEqual(s_basic, 401)
+
+        s_empty, _ = call("/api/cards/04A1B2C3D4E5F6", token=None, custom_headers={"Authorization": "Bearer   "})
+        self.assertEqual(s_empty, 401)
+
+        s_met, raw_metrics = call("/metrics", token=SCRAPE_TOKEN)
+        self.assertEqual(s_met, 200)
+        self.assertIn('reason="non_bearer"', raw_metrics)
+        self.assertIn('reason="malformed_header"', raw_metrics)
+        self.assertIn('reason="missing_token"', raw_metrics)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -57,7 +57,7 @@ import { NotificationService } from '../../../core/services/notification.service
                 id="terminalToken"
                 type="password"
                 class="form-input"
-                placeholder="Ex: dev-terminal-token-change-me"
+                placeholder="Saisir le jeton opérateur borne (depuis .env)"
                 [(ngModel)]="tempTerminalToken"
               />
               <span class="field-hint">Autorise la validation des titres et la consultation des cartes.</span>
@@ -69,7 +69,7 @@ import { NotificationService } from '../../../core/services/notification.service
                 id="adminToken"
                 type="password"
                 class="form-input"
-                placeholder="Ex: dev-admin-token-change-me"
+                placeholder="Saisir le jeton administrateur (depuis .env)"
                 [(ngModel)]="tempAdminToken"
               />
               <span class="field-hint">Autorise les recharges de solde, révocations et l'audit.</span>
@@ -106,9 +106,6 @@ import { NotificationService } from '../../../core/services/notification.service
             </div>
 
             <div class="helpers-row">
-              <button type="button" class="btn btn-secondary" (click)="fillDevTokens()">
-                ⚡ Charger tokens démo locaux
-              </button>
               <button type="button" class="btn-text-danger" (click)="clearTokens()">
                 Purger la session
               </button>
@@ -389,13 +386,6 @@ export class HeaderComponent implements OnInit, OnDestroy {
     this.tempAdminToken = this.session.adminToken() || '';
     this.selectedRole = this.session.activeRole();
     this.showModal.update(v => !v);
-  }
-
-  fillDevTokens(): void {
-    this.tempTerminalToken = 'dev-terminal-token-change-me';
-    this.tempAdminToken = 'dev-admin-token-change-me';
-    this.selectedRole = 'TERMINAL';
-    this.notification.info('Jetons pré-remplis', 'Identifiants de développement injectés en mémoire vive.');
   }
 
   clearTokens(): void {

@@ -1,10 +1,14 @@
 export type CardStatus = 'Active' | 'Revoked';
 
-export interface TransitCard {
+export interface SimulatorCard {
   uid: string;
   status: CardStatus | string;
   label: string;
-  balanceMillimes: number;
+  balanceMillimes?: number;
+}
+
+export interface TransitCard extends SimulatorCard {
+  balanceMillimes?: number;
 }
 
 export interface FareTransaction {

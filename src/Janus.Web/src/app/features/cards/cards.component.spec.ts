@@ -18,9 +18,15 @@ describe('CardsComponent', () => {
     { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte Opposition', balanceMillimes: 0 }
   ];
 
+  const mockSimulatorCards = [
+    { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte Usager Régulier' },
+    { uid: '04DEAD00000001', status: 'Revoked', label: 'Carte Opposition' }
+  ];
+
   beforeEach(async () => {
-    apiSpy = jasmine.createSpyObj('JanusApiService', ['getDemoCards', 'getCard', 'upsertCard']);
+    apiSpy = jasmine.createSpyObj('JanusApiService', ['getDemoCards', 'getSimulatorCards', 'getCard', 'upsertCard']);
     apiSpy.getDemoCards.and.returnValue(of(mockCards));
+    apiSpy.getSimulatorCards.and.returnValue(of(mockSimulatorCards));
 
     await TestBed.configureTestingModule({
       imports: [CardsComponent],
@@ -42,6 +48,31 @@ describe('CardsComponent', () => {
     expect(component).toBeTruthy();
     expect(apiSpy.getDemoCards).toHaveBeenCalled();
     expect(component.cards().length).toBe(2);
+  });
+
+  it('devrait utiliser getSimulatorCards lorsque le rôle authentifié est TERMINAL sans appeler getDemoCards', () => {
+    apiSpy.getDemoCards.calls.reset();
+    apiSpy.getSimulatorCards.calls.reset();
+
+    component.session.setTerminalToken('valid-terminal-session-token');
+    component.loadCards();
+
+    expect(apiSpy.getSimulatorCards).toHaveBeenCalledTimes(1);
+    expect(apiSpy.getDemoCards).not.toHaveBeenCalled();
+    expect(component.cards().length).toBe(2);
+    expect(component.cards()[0].balanceMillimes).toBeUndefined();
+  });
+
+  it('devrait utiliser getDemoCards lorsque le rôle authentifié est ADMIN', () => {
+    apiSpy.getDemoCards.calls.reset();
+    apiSpy.getSimulatorCards.calls.reset();
+
+    component.session.setAdminToken('valid-admin-session-token');
+    component.loadCards();
+
+    expect(apiSpy.getDemoCards).toHaveBeenCalledTimes(1);
+    expect(apiSpy.getSimulatorCards).not.toHaveBeenCalled();
+    expect(component.cards()[0].balanceMillimes).toBe(10000);
   });
 
   it('devrait filtrer les cartes par UID ou libellé de recherche', () => {

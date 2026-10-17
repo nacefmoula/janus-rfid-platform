@@ -16,6 +16,7 @@ public class JanusApiFactory : WebApplicationFactory<Program>
     public string TerminalToken => Environment.GetEnvironmentVariable("TERMINAL_DEMO_TOKEN") ?? "dev-terminal-token-change-me";
     public string Terminal02Token => Environment.GetEnvironmentVariable("TERMINAL_02_TOKEN") ?? "dev-terminal-02-token-change-me";
     public string AdminToken => Environment.GetEnvironmentVariable("ADMIN_DEMO_TOKEN") ?? "dev-admin-token-change-me";
+    public string ScrapeToken => Environment.GetEnvironmentVariable("METRICS_SCRAPE_TOKEN") ?? "dev-metrics-scrape-token-change-me";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -29,6 +30,7 @@ public class JanusApiFactory : WebApplicationFactory<Program>
             var termToken = Environment.GetEnvironmentVariable("TERMINAL_DEMO_TOKEN") ?? "dev-terminal-token-change-me";
             var term2Token = Environment.GetEnvironmentVariable("TERMINAL_02_TOKEN") ?? "dev-terminal-02-token-change-me";
             var adminToken = Environment.GetEnvironmentVariable("ADMIN_DEMO_TOKEN") ?? "dev-admin-token-change-me";
+            var scrapeToken = Environment.GetEnvironmentVariable("METRICS_SCRAPE_TOKEN") ?? "dev-metrics-scrape-token-change-me";
 
             var dict = new Dictionary<string, string?>
             {
@@ -36,6 +38,7 @@ public class JanusApiFactory : WebApplicationFactory<Program>
                 ["TerminalAuth:DemoToken"] = termToken,
                 ["TerminalAuth:Terminal2Token"] = term2Token,
                 ["AdminAuth:DemoToken"] = adminToken,
+                ["MetricsAuth:ScrapeToken"] = scrapeToken,
                 ["Fare:AmountMillimes"] = "1500",
                 ["AntiPassback:Enabled"] = AntiPassbackEnabledOverride ? "true" : "false",
                 ["AntiPassback:WindowSeconds"] = AntiPassbackWindowSecondsOverride.ToString()

@@ -82,7 +82,7 @@ import { NotificationService } from '../../../core/services/notification.service
                 id="terminalToken"
                 type="password"
                 [(ngModel)]="inputTerminalToken"
-                placeholder="Ex: dev-terminal-token-change-me"
+                placeholder="Saisir le jeton opérateur borne (depuis .env)"
                 class="form-control"
               />
               <span class="help-text">Requis pour <code>POST /api/validations</code> et <code>GET /api/cards/&#123;uid&#125;</code></span>
@@ -94,7 +94,7 @@ import { NotificationService } from '../../../core/services/notification.service
                 id="adminToken"
                 type="password"
                 [(ngModel)]="inputAdminToken"
-                placeholder="Ex: dev-admin-token-change-me"
+                placeholder="Saisir le jeton administrateur (depuis .env)"
                 class="form-control"
               />
               <span class="help-text">Requis pour <code>PUT /api/cards/&#123;uid&#125;</code> et <code>GET /api/cards/&#123;uid&#125;/audit</code></span>
@@ -128,9 +128,6 @@ import { NotificationService } from '../../../core/services/notification.service
             </div>
 
             <div class="quick-helpers">
-              <button type="button" class="btn-secondary" (click)="fillDevDefaults()">
-                ⚡ Pré-remplir tokens de développement local
-              </button>
               <button type="button" class="btn-danger-outline" (click)="clearSession()">
                 🗑 Effacer la session
               </button>
@@ -457,14 +454,6 @@ export class NavbarComponent implements OnInit, OnDestroy {
     this.inputAdminToken = this.session.adminToken() || '';
     this.selectedRole = this.session.activeRole();
     this.showSessionModal.update(v => !v);
-  }
-
-  fillDevDefaults(): void {
-    // Remplissage d'aide au test local : tokens par défaut de l'environnement de dev
-    this.inputTerminalToken = 'dev-terminal-token-change-me';
-    this.inputAdminToken = 'dev-admin-token-change-me';
-    this.selectedRole = 'TERMINAL';
-    this.notification.info('Jetons de dev pré-remplis', 'Tokens locaux chargés en mémoire pour le test.');
   }
 
   clearSession(): void {

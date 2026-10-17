@@ -74,7 +74,11 @@
                     <strong class="card-label-text">{{ card.label }}</strong>
                   </td>
                   <td>
-                    <span class="balance-amount">{{ card.balanceMillimes | millimes }}</span>
+                    @if (card.balanceMillimes !== undefined && card.balanceMillimes !== null) {
+                      <span class="balance-amount">{{ card.balanceMillimes | millimes }}</span>
+                    } @else {
+                      <span class="text-dim">Voir fiche détaillée</span>
+                    }
                   </td>
                   <td>
                     <app-badge [value]="card.status"></app-badge>

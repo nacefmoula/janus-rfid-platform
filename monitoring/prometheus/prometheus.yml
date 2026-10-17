@@ -6,6 +6,7 @@ scrape_configs:
   - job_name: 'janus-api'
     metrics_path: '/metrics'
     scrape_interval: 2s
+    bearer_token: 'dev-metrics-scrape-token-change-me'
     static_configs:
       - targets: ['api:8080']
         labels:

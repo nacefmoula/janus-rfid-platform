@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { ApiHealth, PrometheusMetricsSummary } from '../models/health.model';
-import { TransitCard, CardDetail, CardUpsertRequest, CardAuditResponse } from '../models/card.model';
+import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse } from '../models/card.model';
 import { ValidationRequest, ValidationResult } from '../models/validation.model';
 
 @Injectable({
@@ -22,11 +22,29 @@ export class JanusApiService {
   }
 
   /**
-   * Récupère la liste de démonstration des cartes enregistrées.
-   * Endpoint public de démonstration : GET /api/demo/cards
+   * Récupère la liste complète des cartes enregistrées pour l'administration.
+   * Requiert STRICTEMENT les droits Admin : GET /api/demo/cards
    */
-  getDemoCards(): Observable<TransitCard[]> {
-    return this.http.get<TransitCard[]>(`${this.basePath}/api/demo/cards`);
+  getDemoCards(limit?: number, offset?: number): Observable<TransitCard[]> {
+    let params = new HttpParams();
+    if (limit !== undefined) params = params.set('limit', limit.toString());
+    if (offset !== undefined) params = params.set('offset', offset.toString());
+    return this.http.get<TransitCard[]>(`${this.basePath}/api/demo/cards`, {
+      params: params.keys().length > 0 ? params : undefined
+    });
+  }
+
+  /**
+   * Récupère la liste minimale des cartes (uid, status, label sans solde financier) pour le simulateur ou la vue lecture borne.
+   * Accessible aux rôles Terminal et Admin : GET /api/simulator/cards
+   */
+  getSimulatorCards(limit?: number, offset?: number): Observable<SimulatorCard[]> {
+    let params = new HttpParams();
+    if (limit !== undefined) params = params.set('limit', limit.toString());
+    if (offset !== undefined) params = params.set('offset', offset.toString());
+    return this.http.get<SimulatorCard[]>(`${this.basePath}/api/simulator/cards`, {
+      params: params.keys().length > 0 ? params : undefined
+    });
   }
 
   /**
@@ -74,12 +92,15 @@ export class JanusApiService {
   }
 
   /**
-   * Récupère les métriques d'observabilité brutes exposées par OpenTelemetry /metrics
-   * et les convertit en résumé synthétique.
+   * Récupère la synthèse métier du tableau de bord via l'endpoint dédié GET /api/dashboard/summary
+   * (sans exposer l'endpoint interne /metrics ni de secret de scraping Prometheus au navigateur).
    */
   getMetricsSummary(): Observable<PrometheusMetricsSummary> {
-    return this.http.get(`${this.basePath}/metrics`, { responseType: 'text' }).pipe(
-      map(rawMetrics => this.parsePrometheusMetrics(rawMetrics))
+    return this.http.get<PrometheusMetricsSummary>(`${this.basePath}/api/dashboard/summary`).pipe(
+      map(summary => ({
+        ...summary,
+        scrapedAt: summary.scrapedAt ? new Date(summary.scrapedAt) : new Date()
+      }))
     );
   }
 

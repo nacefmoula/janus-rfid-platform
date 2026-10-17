@@ -34,4 +34,28 @@ public static class JanusMetrics
         "janus_fare_amount_millimes_total",
         unit: "millimes",
         description: "Montant cumulé des débits billettiques en millimes");
+
+    /// <summary>
+    /// Total number of failed authentication attempts.
+    /// Labels: endpoint, reason (bounded cardinality, NO secrets, tokens, or UIDs).
+    /// </summary>
+    public static readonly Counter<long> SecurityAuthFailuresTotal = Meter.CreateCounter<long>(
+        "janus_security_auth_failures_total",
+        unit: "{failure}",
+        description: "Nombre total d'échecs d'authentification");
+
+    /// <summary>
+    /// Total number of authorization denials.
+    /// Labels: endpoint, policy (bounded cardinality).
+    /// </summary>
+    public static readonly Counter<long> SecurityAuthzDenialsTotal = Meter.CreateCounter<long>(
+        "janus_security_authz_denials_total",
+        unit: "{denial}",
+        description: "Nombre total de refus d'autorisation");
+
+    private static long _conflictValidationsCount;
+
+    public static void RecordConflictValidation() => Interlocked.Increment(ref _conflictValidationsCount);
+
+    public static long GetConflictValidationsCount() => Interlocked.Read(ref _conflictValidationsCount);
 }

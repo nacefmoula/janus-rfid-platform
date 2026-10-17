@@ -18,25 +18,27 @@ Projet PFE d'ingénierie logicielle : plateforme générique de billettique RFID
 * **Persistance & Données :** PostgreSQL 18 orchestré avec Entity Framework Core 10 et migrations versionnées automatiques (`20261015151954_InitialCreate`, `20261015155513_AddFareTransactionsAndBalance`, `20261015165352_AddCardAuditLogs`).
 * **Intégrité Financière :** Débit atomique sous verrouillage pessimiste PostgreSQL (`SELECT ... FOR UPDATE`), calcul en millimes entiers (aucun arrondi flottant), ledger immutable de transactions (`FareTransactions`).
 * **Idempotence & Anti-Rejeu :** Clé unique composée `(TerminalId, EventId)` avec hachage SHA-256 canonique du payload pour distinguer les rejeux légitimes (aucun débit supplémentaire) des conflits de payload (`409 Conflict`).
-* **Contrôle d'Accès (RBAC) :**
-  * `TerminalAuth:DemoToken` : Rôle borne de validation (`POST /api/validations`, `GET /api/cards/{uid}`).
-  * `AdminAuth:DemoToken` : Rôle administrateur (`PUT /api/cards/{uid}`, `GET /api/cards/{uid}/audit`).
+* **Contrôle d'Accès (RBAC) & Moindre Privilège :**
+  * `TerminalAuth:DemoToken` / `TerminalAuth:Terminal2Token` : Rôles bornes de validation (`POST /api/validations`, `GET /api/cards/{uid}`, `GET /api/simulator/cards`, `GET /api/dashboard/summary`).
+  * `AdminAuth:DemoToken` : Rôle administrateur (`PUT /api/cards/{uid}`, `GET /api/cards/{uid}/audit`, `GET /api/demo/cards`).
+  * `MetricsAuth:ScrapeToken` : Rôle collecteur Prometheus (`PROMETHEUS-SCRAPER`) limité exclusivement à `GET /metrics` (aucun accès aux cartes, validations ou audits).
 * **Observabilité & Télémétrie :**
-  * OpenTelemetry .NET 10 (`JanusMetrics`) avec histogramme de latence sub-seconde explicite.
-  * Prometheus 2.54.1 (scraping toutes les 2s sur `GET /metrics`).
-  * Grafana 11.2.0 avec provisioning automatisé du dashboard de supervision billettique.
-* **Pipeline DevSecOps :** GitHub Actions automatisant le build natif .NET 10, 27 tests d'intégration, le scénario E2E, le contrôle d'ingestion Prometheus et le scan de vulnérabilités/secrets conteneur Trivy.
+  * OpenTelemetry .NET 10 (`JanusMetrics`) avec histogramme de latence sub-seconde explicite et compteurs de sécurité (`janus_security_auth_failures_total`, `janus_security_authz_denials_total`).
+  * Prometheus 2.54.1 (scraping toutes les 2s sur `GET /metrics` avec jeton dédié `METRICS_SCRAPE_TOKEN`, publié uniquement sur `127.0.0.1:9090`).
+  * Grafana 11.2.0 lié à `127.0.0.1:3000` (accès anonyme désactivé par défaut `GRAFANA_ANONYMOUS_ENABLED=false`).
+* **Pipeline DevSecOps :** GitHub Actions automatisant le build natif .NET 10, les suites de tests d'intégration (.NET, Python, Angular), le scénario E2E, le contrôle d'ingestion Prometheus et le scan de vulnérabilités/secrets conteneur Trivy.
 
 ---
 
 ## 2. Topologie des Services & Ports
 
-| Service | Image | Port Hôte | Port Conteneur | Rôle / Accès |
+| Service | Image | Interface & Port Hôte | Port Conteneur | Rôle / Accès |
 | :--- | :--- | :---: | :---: | :--- |
-| **API Janus** | `janus-rfid-platform-api` | `5080` | `8080` | API Kestrel (`http://localhost:5080`) |
-| **PostgreSQL** | `postgres:18` | `5433` | `5432` | Base relationnelle (`janus_db`) |
-| **Prometheus** | `prom/prometheus:v2.54.1` | `9090` | `9090` | Collecteur de métriques (`http://localhost:9090`) |
-| **Grafana** | `grafana/grafana:11.2.0` | `3000` | `3000` | Dashboard supervision (`http://localhost:3000`) |
+| **Frontend Web** | `janus-rfid-platform-web` | `0.0.0.0:4280` | `80` | SPA Angular & Reverse-Proxy `/api/*`, `/health` (`http://localhost:4280`) |
+| **API Janus** | `janus-rfid-platform-api` | `0.0.0.0:5080` | `8080` | API Kestrel (`http://localhost:5080`) |
+| **PostgreSQL** | `postgres:18` | `0.0.0.0:5433` | `5432` | Base relationnelle (`janus_db`) |
+| **Prometheus** | `prom/prometheus:v2.54.1` | `127.0.0.1:9090` | `9090` | Collecteur de métriques (accès local uniquement : `http://127.0.0.1:9090`) |
+| **Grafana** | `grafana/grafana:11.2.0` | `127.0.0.1:3000` | `3000` | Supervision locale authentifiée (`http://127.0.0.1:3000`) |
 
 ---
 
@@ -129,24 +131,28 @@ python3 tests/verify_metrics.py
 python3 tests/verify_metrics.py --self-test
 ```
 
-### Visualiser dans Grafana
-Accédez à **`http://localhost:3000`** :
-* **Accès immédiat :** Préconfiguré en mode consultation (`Viewer`) sans saisie d'identifiants requise pour les démonstrations locales.
+### Visualiser dans Grafana (Administration locale)
+Accédez localement à **`http://127.0.0.1:3000`** :
+* **Isolation réseau :** Les ports de Prometheus (`127.0.0.1:9090`) et Grafana (`127.0.0.1:3000`) sont liés exclusivement à l'interface de bouclage locale (`127.0.0.1`) et ne sont pas exposés sur les interfaces externes. Le reverse-proxy Nginx public (`:4280`) n'expose pas `/metrics`.
+* **Authentification requise par défaut :** L'accès anonyme à Grafana est désactivé par défaut (`GRAFANA_ANONYMOUS_ENABLED=false`). Connectez-vous avec les identifiants définis dans `.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`).
 * **Dashboard préconfiguré :** Rendez-vous dans *Dashboards* $\rightarrow$ **Janus RFID — Observabilité & Métriques DevSecOps** (`janus-rfid-overview`).
 * **Indicateurs affichés :** Taux d'acceptation, débit de validations, latence sub-seconde réelle (p50 / p95 / p99), ventilation des motifs de refus, recettes collectées en Dinars Tunisiens (DT), pool de connexions Npgsql et mémoire runtime .NET 10.
 
 ---
 
-## 6. Endpoints de l'API REST
+## 6. Endpoints de l'API REST & Limitation de Débit
 
-| Méthode | Route | Rôle requis | Description |
-| :--- | :--- | :---: | :--- |
-| `POST` | `/api/validations` | **Terminal** | Validation d'un passage RFID avec débit atomique et protection d'idempotence. |
-| `GET` | `/api/cards/{uid}` | **Terminal / Admin** | Consultation du solde, du statut et de l'historique des transactions (`?limit=10&offset=0`). |
-| `PUT` | `/api/cards/{uid}` | **Admin** | Création, rechargement ou mise à jour de statut avec enregistrement de trace d'audit. |
-| `GET` | `/api/cards/{uid}/audit` | **Admin** | Consultation du journal d'audit administratif paginé (interdit aux bornes avec `403 Forbidden`). |
-| `GET` | `/health` | *Public* | Sonde de santé de l'API et de la connexion PostgreSQL. |
-| `GET` | `/metrics` | *Scraper* | Endpoint d'exportation des métriques OpenTelemetry au format Prometheus. |
+| Méthode | Route | Rôle requis | Politique Rate-Limit (défaut) | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `POST` | `/api/validations` | **Terminal** | `ValidationsPolicy` (30 req/s, burst 60 / borne) | Validation d'un passage RFID avec débit atomique et protection d'idempotence. |
+| `GET` | `/api/cards/{uid}` | **Terminal / Admin** | `CardsReadPolicy` (60 req/s / identité) | Consultation du solde, du statut et de l'historique des transactions (`?limit=10&offset=0`). |
+| `GET` | `/api/simulator/cards` | **Terminal / Admin** | `CardsReadPolicy` (60 req/s / identité) | Liste minimale des cartes (`uid`, `status`, `label`, `balanceMillimes`) pour le simulateur RFID. |
+| `GET` | `/api/dashboard/summary` | **Terminal / Admin** | `CardsReadPolicy` (60 req/s / identité) | Synthèse métier agrégée pour le tableau de bord Angular (sans exposer `/metrics`). |
+| `GET` | `/api/demo/cards` | **Admin** | `AdminPolicy` (15 req/s / admin) | Registre administratif des cartes. |
+| `PUT` | `/api/cards/{uid}` | **Admin** | `AdminPolicy` (15 req/s / admin) | Création, rechargement ou mise à jour de statut avec enregistrement de trace d'audit. |
+| `GET` | `/api/cards/{uid}/audit` | **Admin** | `AdminPolicy` (15 req/s / admin) | Consultation du journal d'audit administratif paginé (interdit aux bornes avec `403 Forbidden`). |
+| `GET` | `/metrics` | **Scraper / Admin** | `CardsReadPolicy` (60 req/s / identité) | Exportation des métriques OpenTelemetry au format Prometheus (`MetricsAuth:ScrapeToken`). |
+| `GET` | `/health` | *Public* | `GlobalLimiter` (30 req/s / IP anonyme) | Sonde de santé de l'API. |
 
 ---
 

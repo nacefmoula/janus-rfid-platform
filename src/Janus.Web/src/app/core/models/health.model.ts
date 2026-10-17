@@ -10,5 +10,8 @@ export interface PrometheusMetricsSummary {
   conflictValidations: number;
   totalDebitedMillimes: number;
   activeCardsCount?: number;
+  revokedCardsCount?: number;
+  totalCardsCount?: number;
+  totalCirculatingBalanceMillimes?: number;
   scrapedAt: Date;
 }

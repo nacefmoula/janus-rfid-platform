@@ -35,8 +35,8 @@
   <div class="methodology-note">
     <span class="note-icon" aria-hidden="true">ℹ️</span>
     <p>
-      <strong>Distinction des données :</strong> Les compteurs ci-dessous proviennent de l'exporteur de télémétrie Prometheus (OpenTelemetry).
-      Ils mesurent les flux d'ingestion réseau du valideur. Les transactions financières officielles restent persistées de façon immuable dans PostgreSQL (table <code>FareTransactions</code>).
+      <strong>Distinction des données :</strong> Les indicateurs ci-dessous sont consolidés par l'endpoint métier <code>GET /api/dashboard/summary</code> :
+      les validations, les recettes encaissées (<code>FareTransactions</code>) et l'état du parc sont agrégés depuis PostgreSQL, tandis que le compteur de conflits d'idempotence (rejets HTTP 409 non persistés) reflète le compteur d'exécution de l'instance API.
     </p>
   </div>
 
@@ -125,7 +125,7 @@
               <span class="stat-label">Cartes Révoquées</span>
             </div>
             <div class="stat-box">
-              <span class="stat-number text-primary">{{ cards().length }}</span>
+              <span class="stat-number text-primary">{{ totalCardsCount }}</span>
               <span class="stat-label">Total Référencé</span>
             </div>
           </div>
