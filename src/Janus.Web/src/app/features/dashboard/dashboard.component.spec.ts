@@ -55,6 +55,13 @@ describe('DashboardComponent', () => {
     expect(component.isLoading()).toBeFalse();
     expect(component.metrics()).toBeNull();
 
+    // Valeurs de repli sûres des compteurs lorsque les métriques sont absentes
+    expect(component.acceptanceRate).toBe(0);
+    expect(component.activeCardsCount).toBe(0);
+    expect(component.revokedCardsCount).toBe(0);
+    expect(component.totalCardsCount).toBe(0);
+    expect(component.totalCirculatingBalanceMillimes).toBe(0);
+
     const banner: HTMLElement | null = fixture.nativeElement.querySelector('.anonymous-session-banner');
     expect(banner).toBeTruthy();
     expect(banner?.textContent).toContain('Session requise');
@@ -82,6 +89,21 @@ describe('DashboardComponent', () => {
     expect(component.revokedCardsCount).toBe(1);
     expect(component.totalCardsCount).toBe(2);
     expect(component.totalCirculatingBalanceMillimes).toBe(15000);
+  });
+
+  it('affiche le libellé exact RECETTES ENCAISSÉES et la base PostgreSQL 18 dans l\'infrastructure', () => {
+    fixture.detectChanges();
+
+    const revenueTitle: HTMLElement | null = fixture.nativeElement.querySelector('.kpi-card.border-primary .kpi-title');
+    expect(revenueTitle?.textContent).toContain('RECETTES ENCAISSÉES');
+
+    const revenueFooter: HTMLElement | null = fixture.nativeElement.querySelector('.kpi-card.border-primary .kpi-footer');
+    expect(revenueFooter?.textContent).toContain('Consolidé depuis PostgreSQL');
+    expect(revenueFooter?.textContent).toContain('FareTransactions');
+
+    const systemRows = fixture.nativeElement.querySelectorAll('.system-item');
+    const systemTexts = Array.from(systemRows).map((el: any) => el.textContent);
+    expect(systemTexts.some((t: string) => t.includes('Base relationnelle (PostgreSQL 18)'))).toBeTrue();
   });
 
   it('devrait purger sur clearTokens() et ignorer les réponses tardives issues d\'une ancienne session', () => {
