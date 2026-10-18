@@ -740,6 +740,6 @@ app.MapPost("/api/validations", async (ValidationRequest request, ClaimsPrincipa
     }
 }).RequireAuthorization("TerminalOnly").RequireRateLimiting("ValidationsPolicy");
 
-app.Run();
+await app.RunAsync();
 
 public partial class Program { }
