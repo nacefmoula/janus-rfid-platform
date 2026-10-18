@@ -41,7 +41,7 @@ public class JanusAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewar
             {
                 error = "unauthorized",
                 message = "Valid authentication credential required."
-            }));
+            }), context.RequestAborted);
             return;
         }
 
@@ -70,7 +70,7 @@ public class JanusAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewar
             {
                 error = "forbidden",
                 message
-            }));
+            }), context.RequestAborted);
             return;
         }
 

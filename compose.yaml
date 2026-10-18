@@ -75,7 +75,7 @@ services:
   web:
     build: ./src/Janus.Web
     container_name: janus-web
-    ports: ["${FRONTEND_PORT:-4280}:80"]
+    ports: ["${FRONTEND_PORT:-4280}:8080"]
     networks:
       janus_net:
         ipv4_address: 172.28.0.10

@@ -17,7 +17,7 @@ export class NotificationService {
   readonly toasts = computed(() => this.toastsSignal());
 
   show(type: ToastMessage['type'], title: string, message: string, autoDismissMs = 5000): void {
-    const id = Math.random().toString(36).substring(2, 9);
+    const id = crypto.randomUUID();
     const toast: ToastMessage = { id, type, title, message, timestamp: new Date() };
 
     this.toastsSignal.update(list => [...list, toast]);

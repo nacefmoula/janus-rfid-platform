@@ -14,19 +14,26 @@ RUN if [ ! -d "node_modules" ]; then npm ci; fi
 RUN npm run build -- --configuration production
 
 # ==========================================
-# Étape 2 : Image d'exécution Nginx allégée
+# Étape 2 : Image d'exécution Nginx allégée et durcie (non-root)
 # ==========================================
 FROM nginx:1.27-alpine AS runtime
 
-# Copie des fichiers statiques compilés depuis l'étape de build
-COPY --from=build /app/dist/janus.web/browser /usr/share/nginx/html
+# Préparation des répertoires d'exécution et permissions pour l'utilisateur non privilégié nginx
+RUN touch /run/nginx.pid && \
+    chown -R nginx:nginx /run/nginx.pid /var/cache/nginx /var/log/nginx /etc/nginx/conf.d
 
-# Configuration Nginx (SPA routing + proxying API Janus)
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copie des fichiers statiques compilés avec propriété non-root
+COPY --from=build --chown=nginx:nginx /app/dist/janus.web/browser /usr/share/nginx/html
 
-EXPOSE 80
+# Configuration Nginx (SPA routing + proxying API Janus sur port 8080)
+COPY --chown=nginx:nginx nginx.conf /etc/nginx/conf.d/default.conf
+
+# Bascule sur l'utilisateur non-root nginx (UID 101)
+USER nginx
+
+EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:8080/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
