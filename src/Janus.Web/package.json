@@ -41,6 +41,14 @@
     "postcss": "^8.5.30",
     "webpack-dev-middleware": "^7.4.6",
     "webpack-dev-server": "^5.2.6",
-    "http-proxy-middleware": "^3.0.7"
+    "http-proxy-middleware": "^3.0.7",
+    "vite": "^6.4.4",
+    "@angular/build": {
+      "esbuild": "^0.28.1"
+    },
+    "@angular-devkit/build-angular": {
+      "esbuild": "^0.28.1"
+    },
+    "@babel/core": "^7.29.6"
   }
 }
