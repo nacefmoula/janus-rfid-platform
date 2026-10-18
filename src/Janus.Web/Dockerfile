@@ -20,13 +20,13 @@ FROM nginx:1.27-alpine AS runtime
 
 # Préparation des répertoires d'exécution et permissions pour l'utilisateur non privilégié nginx
 RUN touch /run/nginx.pid && \
-    chown -R nginx:nginx /run/nginx.pid /var/cache/nginx /var/log/nginx /etc/nginx/conf.d
+    chown -R nginx:nginx /run/nginx.pid /var/cache/nginx /var/log/nginx
 
-# Copie des fichiers statiques compilés avec propriété non-root
-COPY --from=build --chown=nginx:nginx /app/dist/janus.web/browser /usr/share/nginx/html
+# Copie des fichiers statiques compilés (détenus par root, lecture seule pour nginx)
+COPY --from=build /app/dist/janus.web/browser /usr/share/nginx/html
 
-# Configuration Nginx (SPA routing + proxying API Janus sur port 8080)
-COPY --chown=nginx:nginx nginx.conf /etc/nginx/conf.d/default.conf
+# Configuration Nginx (détenue par root, lecture seule pour nginx)
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Bascule sur l'utilisateur non-root nginx (UID 101)
 USER nginx
