@@ -171,15 +171,13 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddAuthentication(JanusTokenAuthHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, JanusTokenAuthHandler>(JanusTokenAuthHandler.SchemeName, null);
 
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("TerminalOnly", p => p.RequireRole("Terminal").RequireClaim("permission", "validations:create"));
-    options.AddPolicy("AdminOnly", p => p.RequireRole("Admin").RequireClaim("permission", "cards:admin"));
-    options.AddPolicy("CardsRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "cards:read")));
-    options.AddPolicy("DashboardRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "dashboard:read") || ctx.User.HasClaim("permission", "cards:read")));
-    options.AddPolicy("AuditRead", p => p.RequireRole("Admin").RequireClaim("permission", "audit:read"));
-    options.AddPolicy("MetricsScrape", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "metrics:scrape") || ctx.User.IsInRole("Admin")));
-});
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("TerminalOnly", p => p.RequireRole("Terminal").RequireClaim("permission", "validations:create"))
+    .AddPolicy("AdminOnly", p => p.RequireRole("Admin").RequireClaim("permission", "cards:admin"))
+    .AddPolicy("CardsRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "cards:read")))
+    .AddPolicy("DashboardRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "dashboard:read") || ctx.User.HasClaim("permission", "cards:read")))
+    .AddPolicy("AuditRead", p => p.RequireRole("Admin").RequireClaim("permission", "audit:read"))
+    .AddPolicy("MetricsScrape", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "metrics:scrape") || ctx.User.IsInRole("Admin")));
 
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, JanusAuthorizationMiddlewareResultHandler>();
 
@@ -528,8 +526,11 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
         await tx.CommitAsync();
 
         // Journalisation sans secrets
-        logger.LogInformation("Admin card update: action={Action}, uid={CardUid}, balance={OldBal}->{NewBal}, status={OldStat}->{NewStat}, reason={Reason}, actor={Actor}",
-            action, normalized, prevBalance, request.BalanceMillimes, prevStatus, card.Status, auditReason, actor);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation("Admin card update: action={Action}, uid={CardUid}, balance={OldBal}->{NewBal}, status={OldStat}->{NewStat}, reason={Reason}, actor={Actor}",
+                action, normalized, prevBalance, request.BalanceMillimes, prevStatus, card.Status, auditReason, actor);
+        }
 
         return Results.Ok(new {
             card.Uid,
@@ -741,5 +742,3 @@ app.MapPost("/api/validations", async (ValidationRequest request, ClaimsPrincipa
 }).RequireAuthorization("TerminalOnly").RequireRateLimiting("ValidationsPolicy");
 
 await app.RunAsync();
-
-public partial class Program { }
