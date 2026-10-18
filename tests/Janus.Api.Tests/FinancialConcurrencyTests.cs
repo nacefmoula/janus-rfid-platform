@@ -24,9 +24,9 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         await _factory.DisposeAsync();
     }
 
-    private string TerminalToken => _factory.TerminalToken;
-    private string Terminal02Token => _factory.Terminal02Token;
-    private string AdminToken => _factory.AdminToken;
+    private static string TerminalToken => JanusApiFactory.TerminalToken;
+    private static string Terminal02Token => JanusApiFactory.Terminal02Token;
+    private static string AdminToken => JanusApiFactory.AdminToken;
 
     private async Task<string> PrepareCardAsync(int balanceMillimes, CardStatus status = CardStatus.Active, string? label = null)
     {
@@ -44,7 +44,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         return uid;
     }
 
-    private HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, string? token = null, DateTimeOffset? occurredAt = null)
+    private static HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, string? token = null, DateTimeOffset? occurredAt = null)
     {
         var id = eventId ?? Guid.NewGuid();
         var time = occurredAt ?? DateTimeOffset.UtcNow;
@@ -62,7 +62,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         return req;
     }
 
-    private HttpRequestMessage CreateCardUpsertRequest(string cardUid, int balanceMillimes, string? status = "Active", string? label = null, string? reason = null, string? token = null)
+    private static HttpRequestMessage CreateCardUpsertRequest(string cardUid, int balanceMillimes, string? status = "Active", string? label = null, string? reason = null, string? token = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/cards/{cardUid}")
         {

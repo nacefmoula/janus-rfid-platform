@@ -28,10 +28,10 @@ public class SecurityHardeningTests : IAsyncLifetime
         await _factory.DisposeAsync();
     }
 
-    private string TerminalToken => _factory.TerminalToken;
-    private string Terminal02Token => _factory.Terminal02Token;
-    private string AdminToken => _factory.AdminToken;
-    private string ScrapeToken => _factory.ScrapeToken;
+    private static string TerminalToken => JanusApiFactory.TerminalToken;
+    private static string Terminal02Token => JanusApiFactory.Terminal02Token;
+    private static string AdminToken => JanusApiFactory.AdminToken;
+    private static string ScrapeToken => JanusApiFactory.ScrapeToken;
 
     private async Task<string> PrepareCardAsync(int balanceMillimes, CardStatus status = CardStatus.Active)
     {
