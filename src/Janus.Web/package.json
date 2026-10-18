@@ -10,8 +10,6 @@
   },
   "private": true,
   "dependencies": {
-    "@angular-devkit/build-angular": "^19.2.27",
-    "@angular/cli": "^19.2.27",
     "@angular/common": "^19.2.0",
     "@angular/compiler": "^19.2.0",
     "@angular/compiler-cli": "^19.2.0",
@@ -26,6 +24,8 @@
     "zone.js": "~0.15.0"
   },
   "devDependencies": {
+    "@angular-devkit/build-angular": "^19.2.27",
+    "@angular/cli": "^19.2.27",
     "@types/jasmine": "~5.1.0",
     "jasmine-core": "~5.6.0",
     "karma": "~6.4.0",
@@ -34,5 +34,13 @@
     "karma-jasmine": "~5.1.0",
     "karma-jasmine-html-reporter": "~2.1.0",
     "puppeteer": "^25.14.0"
+  },
+  "overrides": {
+    "piscina": "4.9.4",
+    "tar": "7.5.22",
+    "postcss": "^8.5.30",
+    "webpack-dev-middleware": "^7.4.6",
+    "webpack-dev-server": "^5.2.6",
+    "http-proxy-middleware": "^3.0.7"
   }
 }
