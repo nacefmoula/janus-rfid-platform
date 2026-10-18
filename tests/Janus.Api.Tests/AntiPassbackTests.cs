@@ -23,8 +23,11 @@ public class AntiPassbackTests : IAsyncLifetime
         await _factory.DisposeAsync();
     }
 
-    private string TerminalToken => _factory.TerminalToken;
-    private string Terminal02Token => _factory.Terminal02Token;
+    private static readonly string[] ExpectedConcurrentDecisions = ["ACCEPTED", "REJECTED"];
+    private static readonly string[] ExpectedConcurrentReasons = ["ACTIVE_CARD", "PASSBACK_VIOLATION"];
+
+    private static string TerminalToken => JanusApiFactory.TerminalToken;
+    private static string Terminal02Token => JanusApiFactory.Terminal02Token;
 
     private async Task<string> PrepareCardAsync(int balanceMillimes, CardStatus status = CardStatus.Active)
     {
@@ -42,7 +45,7 @@ public class AntiPassbackTests : IAsyncLifetime
         return uid;
     }
 
-    private HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, DateTimeOffset? occurredAt = null, string? token = null)
+    private static HttpRequestMessage CreateValidationRequest(string cardUid, Guid? eventId = null, DateTimeOffset? occurredAt = null, string? token = null)
     {
         var id = eventId ?? Guid.NewGuid();
         var time = occurredAt ?? DateTimeOffset.UtcNow;
@@ -221,7 +224,7 @@ public class AntiPassbackTests : IAsyncLifetime
         var resp1 = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/validations")
         {
             Content = JsonContent.Create(new { eventId = Guid.NewGuid(), cardUid = uid, occurredAt = DateTimeOffset.UtcNow, eventType = "TRANSPORT_VALIDATION" }),
-            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", disabledFactory.TerminalToken) }
+            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", JanusApiFactory.TerminalToken) }
         });
         Assert.Equal(HttpStatusCode.OK, resp1.StatusCode);
 
@@ -229,7 +232,7 @@ public class AntiPassbackTests : IAsyncLifetime
         var resp2 = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/validations")
         {
             Content = JsonContent.Create(new { eventId = Guid.NewGuid(), cardUid = uid, occurredAt = DateTimeOffset.UtcNow, eventType = "TRANSPORT_VALIDATION" }),
-            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", disabledFactory.TerminalToken) }
+            Headers = { Authorization = new AuthenticationHeaderValue("Bearer", JanusApiFactory.TerminalToken) }
         });
         Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
         var body2 = await resp2.Content.ReadFromJsonAsync<JsonElement>();
@@ -328,8 +331,8 @@ public class AntiPassbackTests : IAsyncLifetime
         var reasons = bodies.Select(b => b.GetProperty("reason").GetString()).OrderBy(r => r).ToList();
 
         // Exactement 1 ACCEPTED et 1 REJECTED (PASSBACK_VIOLATION)
-        Assert.Equal(new[] { "ACCEPTED", "REJECTED" }, decisions);
-        Assert.Equal(new[] { "ACTIVE_CARD", "PASSBACK_VIOLATION" }, reasons);
+        Assert.Equal(ExpectedConcurrentDecisions, decisions);
+        Assert.Equal(ExpectedConcurrentReasons, reasons);
 
         // Vérification directe des invariants en base
         using var db = _factory.CreateDbContext();
