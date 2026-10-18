@@ -54,10 +54,12 @@ jobs:
 
       - name: Install dependencies
         working-directory: src/Janus.Web
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run Angular unit tests (Karma / Headless Chrome) with code coverage
         working-directory: src/Janus.Web
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
         run: |
           npm test -- --watch=false --code-coverage
           sed -i 's|^SF:src/|SF:src/Janus.Web/src/|' coverage/janus.web/lcov.info

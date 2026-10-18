@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # Installation des dépendances si non présentes dans le contexte (ex: environnement CI vierge)
-RUN if [ ! -d "node_modules" ]; then npm ci; fi
+RUN if [ ! -d "node_modules" ]; then npm ci --ignore-scripts; fi
 
 # Compilation de production Angular
 RUN npm run build -- --configuration production
