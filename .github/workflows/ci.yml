@@ -211,7 +211,7 @@ jobs:
       # Étape 1 : Génération du rapport SARIF pour audit complet (sévérités HIGH et CRITICAL).
       # ignore-unfixed: true filtre les vulnérabilités amont sans correctif éditeur disponible.
       - name: Generate Trivy SARIF report (HIGH & CRITICAL)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
           format: 'sarif'
@@ -233,7 +233,7 @@ jobs:
 
       # Étape 3 : Affichage du résumé tabulaire lisible dans la console de CI pour les sévérités HIGH et CRITICAL.
       - name: Display Trivy audit summary in CI logs (HIGH & CRITICAL)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
           format: 'table'
@@ -245,7 +245,7 @@ jobs:
       # Politique de blocage : Seules les vulnérabilités CRITICAL avec un correctif disponible (actionnables)
       # provoquent l'échec du job (exit-code: 1). Les vulnérabilités HIGH sont signalées et auditées sans bloquer la pipeline.
       - name: Enforce Trivy security gate (Fail ONLY on actionable CRITICAL vulnerabilities)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
           format: 'table'
