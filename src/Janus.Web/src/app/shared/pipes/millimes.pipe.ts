@@ -12,7 +12,7 @@ import { Pipe, PipeTransform } from '@angular/core';
 })
 export class MillimesPipe implements PipeTransform {
   transform(value: number | null | undefined, includeUnit = true): string {
-    if (value === null || value === undefined || isNaN(value)) {
+    if (value === null || value === undefined || Number.isNaN(value)) {
       return includeUnit ? '0,000 TND' : '0,000';
     }
 
