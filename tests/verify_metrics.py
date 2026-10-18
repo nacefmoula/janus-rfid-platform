@@ -17,6 +17,7 @@ Supporte un mode d'auto-test reproductible avec simulation de scénarios de réu
 """
 
 import json
+import math
 import os
 import sys
 import time
@@ -202,7 +203,7 @@ def run_self_tests():
         }
     }
     res = validate_validations_payload(nominal_payload)
-    assert res["total_validations"] == 14.0
+    assert math.isclose(res["total_validations"], 14.0, rel_tol=1e-9, abs_tol=1e-9)
     assert "ACCEPTED" in res["decisions"] and "REJECTED" in res["decisions"]
     print("  [PASS] Scénario 1 : Payload nominal validé avec succès.")
 
@@ -270,7 +271,7 @@ def run_self_tests():
 
     # Scénario 6 : Validation de l'histogramme de latence (succès et échec)
     valid_hist = {"status": "success", "data": {"result": [{"value": [1700000000, "42"]}]}}
-    assert validate_latency_payload(valid_hist) == 42.0
+    assert math.isclose(validate_latency_payload(valid_hist), 42.0, rel_tol=1e-9, abs_tol=1e-9)
     zero_hist = {"status": "success", "data": {"result": [{"value": [1700000000, "0"]}]}}
     try:
         validate_latency_payload(zero_hist)
@@ -281,7 +282,7 @@ def run_self_tests():
 
     # Scénario 7 : Validation des recettes financières (succès et échec)
     valid_fare = {"status": "success", "data": {"result": [{"value": [1700000000, "3000"]}]}}
-    assert validate_fare_payload(valid_fare) == 3000.0
+    assert math.isclose(validate_fare_payload(valid_fare), 3000.0, rel_tol=1e-9, abs_tol=1e-9)
     zero_fare = {"status": "success", "data": {"result": [{"value": [1700000000, "0"]}]}}
     try:
         validate_fare_payload(zero_fare)
