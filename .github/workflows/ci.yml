@@ -10,6 +10,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 
@@ -52,9 +56,18 @@ jobs:
         working-directory: src/Janus.Web
         run: npm ci
 
-      - name: Run Angular unit tests (Karma / Headless Chrome)
+      - name: Run Angular unit tests (Karma / Headless Chrome) with code coverage
         working-directory: src/Janus.Web
-        run: npm test -- --watch=false
+        run: |
+          npm test -- --watch=false --code-coverage
+          sed -i 's|^SF:src/|SF:src/Janus.Web/src/|' coverage/janus.web/lcov.info
+
+      - name: Upload frontend code coverage artifact (LCOV)
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: frontend-coverage
+          path: src/Janus.Web/coverage/janus.web/lcov.info
+          if-no-files-found: error
 
       - name: Build Angular production bundle
         working-directory: src/Janus.Web
@@ -253,3 +266,121 @@ jobs:
           severity: 'CRITICAL'
           ignore-unfixed: true
           vuln-type: 'os,library'
+
+  sonarcloud:
+    name: 5. SonarCloud Code Analysis & Quality Gate
+    runs-on: ubuntu-latest
+    needs: [build-dotnet, test-and-build-frontend]
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: janus_ci_db
+          POSTGRES_USER: janus_ci_user
+          POSTGRES_PASSWORD: ci_test_password_secure_99
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_DB: janus_ci_db
+      POSTGRES_USER: janus_ci_user
+      POSTGRES_PASSWORD: ci_test_password_secure_99
+      ConnectionStrings__JanusDb: "Host=localhost;Port=5433;Database=janus_ci_db;Username=janus_ci_user;Password=ci_test_password_secure_99"
+      TERMINAL_DEMO_TOKEN: ci_terminal_token_secure_99
+      TERMINAL_02_TOKEN: ci_terminal_02_token_secure_99
+      ADMIN_DEMO_TOKEN: ci_admin_token_secure_99
+      FARE_AMOUNT_MILLIMES: 1500
+      ANTIPASSBACK_ENABLED: "true"
+      ANTIPASSBACK_WINDOW_SECONDS: "30"
+
+    steps:
+      - name: Checkout repository (full git history for SonarCloud)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Check SonarCloud Token availability
+        id: check_token
+        run: |
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "has_token=false" >> $GITHUB_OUTPUT
+            echo "::warning title=SonarCloud::SONAR_TOKEN secret is not configured in GitHub repository secrets. Skipping SonarCloud analysis."
+          else
+            echo "has_token=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Java 21 (required by SonarScanner)
+        if: steps.check_token.outputs.has_token == 'true'
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup .NET 10 SDK
+        if: steps.check_token.outputs.has_token == 'true'
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download frontend code coverage artifact (LCOV)
+        if: steps.check_token.outputs.has_token == 'true'
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
+        with:
+          name: frontend-coverage
+          path: src/Janus.Web/coverage/janus.web
+
+      - name: Install SonarScanner for .NET
+        if: steps.check_token.outputs.has_token == 'true'
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: Begin SonarCloud analysis session
+        if: steps.check_token.outputs.has_token == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          dotnet sonarscanner begin \
+            /k:"nacefmoula_janus-rfid-platform" \
+            /o:"nacefmoula-1" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.token="${{ secrets.SONAR_TOKEN }}" \
+            /d:sonar.cs.opencover.reportsPaths="coverage/**/coverage.opencover.xml" \
+            /d:sonar.javascript.lcov.reportPaths="src/Janus.Web/coverage/janus.web/lcov.info" \
+            /d:sonar.scanner.scanAll=true \
+            /d:sonar.exclusions="**/node_modules/**,**/dist/**,**/.angular/**,**/bin/**,**/obj/**" \
+            /d:sonar.coverage.exclusions="tests/**,**/*.spec.ts,**/Program.cs,**/Migrations/**" \
+            /d:sonar.qualitygate.wait=true
+
+      - name: Restore NuGet dependencies
+        if: steps.check_token.outputs.has_token == 'true'
+        run: dotnet restore
+
+      - name: Compile solution under Sonar analysis
+        if: steps.check_token.outputs.has_token == 'true'
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Execute .NET tests with OpenCover collection
+        if: steps.check_token.outputs.has_token == 'true'
+        run: |
+          dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --collect:"XPlat Code Coverage;Format=opencover" \
+            --results-directory ./coverage
+
+      - name: End SonarCloud analysis session and evaluate Quality Gate
+        if: steps.check_token.outputs.has_token == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: dotnet sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"

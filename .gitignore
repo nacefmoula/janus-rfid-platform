@@ -7,3 +7,5 @@ GEMINI.md
 **/node_modules/
 dist/
 .angular/
+coverage/
+.sonarqube/
