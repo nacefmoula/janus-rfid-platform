@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { of, Subject, throwError } from 'rxjs';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
@@ -614,5 +614,303 @@ describe('CardsComponent', () => {
       const globalEmptyText = fixture.nativeElement.querySelector('.empty-state p')?.textContent;
       expect(globalEmptyText).toContain('Aucune carte enregistrée dans le système');
     });
+  });
+
+  describe('Couverture avancée des méthodes et branches conditionnelles', () => {
+    it('gère le rechargement rapide avec addAmountMillimes et refuse les soldes négatifs ou motifs vides', () => {
+      component.session.setAdminToken('valid-admin-token');
+      component.openEditModal(mockCards[0]);
+      expect(component.editBalanceMillimes).toBe(10000);
+
+      component.addAmountMillimes(5000);
+      expect(component.editBalanceMillimes).toBe(15000);
+
+      component.addAmountMillimes(10000);
+      expect(component.editBalanceMillimes).toBe(25000);
+
+      // Rejet solde négatif
+      component.editBalanceMillimes = -500;
+      component.editReason = 'Test solde négatif';
+      component.submitCardUpdate();
+      expect(component.modalErrorMessage()).toContain('Le solde d\'une carte ne peut pas être négatif');
+      expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+
+      // Rejet motif vide
+      component.editBalanceMillimes = 10000;
+      component.editReason = '   ';
+      component.submitCardUpdate();
+      expect(component.modalErrorMessage()).toContain('Un motif explicite est obligatoire');
+      expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+    });
+
+    it('navigue entre les pages serveur en mode ADMIN et vérifie les bornes', () => {
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.getCards.and.returnValue(of({
+        items: mockCards,
+        page: 1,
+        pageSize: 10,
+        totalCount: 40,
+        totalPages: 4
+      }));
+
+      component.loadCards();
+      expect(component.currentPage()).toBe(1);
+      expect(component.totalPages).toBe(4);
+
+      // goToFirstPage quand déjà sur page 1 ne fait rien
+      apiSpy.getCards.calls.reset();
+      component.goToFirstPage();
+      expect(apiSpy.getCards).not.toHaveBeenCalled();
+
+      // goToNextPage avance à 2 et recharge
+      component.goToNextPage();
+      expect(component.currentPage()).toBe(2);
+      expect(apiSpy.getCards).toHaveBeenCalledWith(2, 10, undefined, undefined);
+
+      // goToLastPage saute à la dernière page (4)
+      component.goToLastPage();
+      expect(component.currentPage()).toBe(4);
+      expect(apiSpy.getCards).toHaveBeenCalledWith(4, 10, undefined, undefined);
+
+      // goToLastPage quand déjà sur dernière page ne fait rien
+      apiSpy.getCards.calls.reset();
+      component.goToLastPage();
+      expect(apiSpy.getCards).not.toHaveBeenCalled();
+
+      // goToNextPage quand sur dernière page ne fait rien
+      component.goToNextPage();
+      expect(component.currentPage()).toBe(4);
+      expect(apiSpy.getCards).not.toHaveBeenCalled();
+
+      // goToPreviousPage recule à 3
+      component.goToPreviousPage();
+      expect(component.currentPage()).toBe(3);
+      expect(apiSpy.getCards).toHaveBeenCalledWith(3, 10, undefined, undefined);
+
+      // goToFirstPage retourne à 1
+      component.goToFirstPage();
+      expect(component.currentPage()).toBe(1);
+      expect(apiSpy.getCards).toHaveBeenCalledWith(1, 10, undefined, undefined);
+
+      // goToPreviousPage quand sur page 1 ne fait rien
+      apiSpy.getCards.calls.reset();
+      component.goToPreviousPage();
+      expect(apiSpy.getCards).not.toHaveBeenCalled();
+    });
+
+    it('permet de modifier la taille de page parmi les valeurs autorisées (10, 25, 50)', () => {
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.getCards.calls.reset();
+
+      component.onPageSizeChange(50);
+      expect(component.pageSize()).toBe(50);
+      expect(component.currentPage()).toBe(1);
+      expect(apiSpy.getCards).toHaveBeenCalledWith(1, 50, undefined, undefined);
+
+      component.onPageSizeChange(25);
+      expect(component.pageSize()).toBe(25);
+
+      // Valeur non autorisée ignorée
+      apiSpy.getCards.calls.reset();
+      component.onPageSizeChange(999);
+      expect(component.pageSize()).toBe(25);
+      expect(apiSpy.getCards).not.toHaveBeenCalled();
+    });
+
+    it('gère l\'affichage, les erreurs et la fermeture de la fiche détaillée', () => {
+      component.session.setAdminToken('valid-admin-token');
+      const mockDetail: CardDetail = {
+        uid: '04A1B2C3D4E5F6',
+        status: 'Active',
+        label: 'Carte Détail Test',
+        balanceMillimes: 12000,
+        transactionsCount: 1,
+        limit: 50,
+        offset: 0,
+        transactions: []
+      };
+      apiSpy.getCard.and.returnValue(of(mockDetail));
+
+      component.openCardDetail(mockCards[0]);
+      expect(component.selectedCardDetail()?.label).toBe('Carte Détail Test');
+      expect(component.isLoadingDetail()).toBeFalse();
+
+      component.closeCardDetail();
+      expect(component.selectedCardDetail()).toBeNull();
+
+      // Erreur getCard fournit un objet de repli
+      apiSpy.getCard.and.returnValue(throwError(() => new Error('Erreur réseau')));
+      component.openCardDetail(mockCards[0]);
+      expect(component.selectedCardDetail()?.uid).toBe(mockCards[0].uid);
+      expect(component.isLoadingDetail()).toBeFalse();
+    });
+
+    it('gère l\'erreur réseau lors du chargement des cartes en mode ADMIN et TERMINAL', () => {
+      // 1. Erreur en mode ADMIN
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.getCards.and.returnValue(throwError(() => new Error('API indisponible')));
+
+      component.loadCards();
+      expect(component.cards()).toEqual([]);
+      expect(component.totalCardsCount()).toBe(0);
+      expect(component.totalPagesCount()).toBe(1);
+      expect(component.isLoading()).toBeFalse();
+
+      // 2. Erreur en mode TERMINAL
+      component.session.clearTokens();
+      component.session.setTerminalToken('valid-term-token');
+      apiSpy.getSimulatorCards.and.returnValue(throwError(() => new Error('Borne déconnectée')));
+
+      component.loadCards();
+      expect(component.cards()).toEqual([]);
+      expect(component.totalCardsCount()).toBe(0);
+      expect(component.totalPagesCount()).toBe(1);
+      expect(component.isLoading()).toBeFalse();
+    });
+
+    it('borne la page courante au maximum disponible via clampCurrentPage', () => {
+      component.currentPage.set(10);
+      (component as unknown as { clampCurrentPage: () => void }).clampCurrentPage();
+      expect(component.currentPage()).toBe(component.totalPages);
+    });
+
+    it('gère le clic backdrop et le piégeage du focus clavier sur la modale', () => {
+      component.session.setAdminToken('valid-admin-token');
+      component.openEditModal(mockCards[0]);
+      expect(component.showEditModal()).toBeTrue();
+
+      // Clic hors de la boîte de dialogue ferme la modale
+      const fakeEvent = {
+        target: 'backdrop',
+        currentTarget: 'backdrop'
+      } as unknown as MouseEvent;
+      component.onBackdropClick(fakeEvent);
+      expect(component.showEditModal()).toBeFalse();
+
+      // Si isSubmitting est vrai, onBackdropClick ne ferme pas
+      component.openEditModal(mockCards[0]);
+      component.isSubmitting.set(true);
+      component.onBackdropClick(fakeEvent);
+      expect(component.showEditModal()).toBeTrue();
+      component.isSubmitting.set(false);
+
+      // onTabTrap avec touche autre que Tab ne fait rien
+      const nonTabEvent = new KeyboardEvent('keydown', { key: 'Escape' });
+      expect(() => component.onTabTrap(nonTabEvent)).not.toThrow();
+    });
+
+    it('ferme la fiche détaillée lors de l\'appui sur la touche Escape', () => {
+      const mockDetail: CardDetail = {
+        uid: '04A1B2C3D4E5F6',
+        status: 'Active',
+        label: 'Carte Test',
+        balanceMillimes: 10000,
+        transactionsCount: 0,
+        limit: 50,
+        offset: 0,
+        transactions: []
+      };
+      component.selectedCardDetail.set(mockDetail);
+      expect(component.selectedCardDetail()).not.toBeNull();
+
+      const escapeEvent = new KeyboardEvent('keydown', { key: 'Escape' });
+      spyOn(escapeEvent, 'preventDefault');
+      component.onEscapeKey(escapeEvent);
+
+      expect(escapeEvent.preventDefault).toHaveBeenCalled();
+      expect(component.selectedCardDetail()).toBeNull();
+    });
+
+    it('actualise la fiche détaillée ouverte après une mise à jour réussie de carte', () => {
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.upsertCard.and.returnValue(of({
+        uid: '04A1B2C3D4E5F6',
+        status: 'Active',
+        label: 'Carte Renommée',
+        balanceMillimes: 20000
+      }));
+      apiSpy.getCard.and.returnValue(of({
+        uid: '04A1B2C3D4E5F6',
+        status: 'Active',
+        label: 'Carte Renommée',
+        balanceMillimes: 20000,
+        transactionsCount: 0,
+        limit: 50,
+        offset: 0,
+        transactions: []
+      }));
+
+      // Ouvrir fiche détaillée pour la même carte
+      component.openCardDetail(mockCards[0]);
+      expect(component.selectedCardDetail()?.uid).toBe('04A1B2C3D4E5F6');
+
+      // Ouvrir modale et soumettre
+      component.openEditModal(mockCards[0]);
+      component.editLabel = 'Carte Renommée';
+      component.editReason = 'Mise à jour motif';
+      component.submitCardUpdate();
+
+      expect(apiSpy.upsertCard).toHaveBeenCalled();
+      expect(apiSpy.getCard).toHaveBeenCalled();
+      expect(component.selectedCardDetail()?.label).toBe('Carte Renommée');
+    });
+
+    it('ajuste la page courante en mode TERMINAL si le nombre de pages calculé est inférieur', () => {
+      component.session.setTerminalToken('valid-term-token');
+      apiSpy.getSimulatorCards.and.returnValue(of([
+        { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte Unique' }
+      ]));
+
+      // On force currentPage à 5 avant le chargement
+      component.currentPage.set(5);
+      component.loadCards();
+
+      expect(component.totalCardsCount()).toBe(1);
+      expect(component.totalPagesCount()).toBe(1);
+      expect(component.currentPage()).toBe(1);
+    });
+
+    it('exécute le piégeage du focus au clavier (Tab et Shift+Tab) dans la modale', () => {
+      component.session.setAdminToken('valid-admin-token');
+      component.openEditModal(mockCards[0]);
+      fixture.detectChanges();
+
+      const modalDialog = fixture.nativeElement.querySelector('.modal-dialog[role="dialog"]');
+      expect(modalDialog).toBeTruthy();
+
+      const focusables = Array.from(
+        modalDialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')
+      ) as HTMLElement[];
+
+      if (focusables.length >= 2) {
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        // Shift+Tab sur le premier élément boucle vers le dernier
+        first.focus();
+        const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true });
+        spyOn(shiftTabEvent, 'preventDefault');
+        component.onTabTrap(shiftTabEvent);
+
+        // Tab sur le dernier élément boucle vers le premier
+        last.focus();
+        const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: false });
+        spyOn(tabEvent, 'preventDefault');
+        component.onTabTrap(tabEvent);
+      }
+    });
+
+    it('traite la saisie de recherche temporisée avec debounceTime via onSearchInput', fakeAsync(() => {
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.getCards.calls.reset();
+
+      component.onSearchInput('Usager');
+      expect(component.currentPage()).toBe(1);
+      expect(component.searchFilter()).toBe(''); // pas encore émis avant 300ms
+
+      tick(300);
+      expect(component.searchFilter()).toBe('Usager');
+      expect(apiSpy.getCards).toHaveBeenCalled();
+    }));
   });
 });

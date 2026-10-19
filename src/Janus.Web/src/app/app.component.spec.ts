@@ -36,4 +36,22 @@ describe('AppComponent', () => {
     expect(compiled.querySelector('app-header')).toBeTruthy();
     expect(compiled.querySelector('router-outlet')).toBeTruthy();
   });
+
+  it('devrait basculer et fermer la barre latérale via ses méthodes dédiées', () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const app = fixture.componentInstance;
+    expect(app.sidebarOpen()).toBeFalse();
+
+    app.toggleSidebar();
+    expect(app.sidebarOpen()).toBeTrue();
+
+    app.toggleSidebar();
+    expect(app.sidebarOpen()).toBeFalse();
+
+    app.toggleSidebar();
+    expect(app.sidebarOpen()).toBeTrue();
+
+    app.closeSidebar();
+    expect(app.sidebarOpen()).toBeFalse();
+  });
 });

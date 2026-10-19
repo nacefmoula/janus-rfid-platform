@@ -148,6 +148,40 @@ describe('JanusApiService', () => {
     });
   });
 
+  it('devrait appeler GET /api/cards avec paramètres par défaut sans q ni status superflu', () => {
+    service.getCards().subscribe(res => {
+      expect(res.page).toBe(1);
+      expect(res.pageSize).toBe(25);
+      expect(res.items.length).toBe(0);
+    });
+
+    const req = httpMock.expectOne('/api/cards?page=1&pageSize=25');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      items: [],
+      page: 1,
+      pageSize: 25,
+      totalCount: 0,
+      totalPages: 1
+    });
+  });
+
+  it('ne devrait pas ajouter de paramètre q vide ni de filtre status ALL à GET /api/cards', () => {
+    service.getCards(1, 25, '   ', 'ALL').subscribe(res => {
+      expect(res.page).toBe(1);
+    });
+
+    const req = httpMock.expectOne('/api/cards?page=1&pageSize=25');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      items: [],
+      page: 1,
+      pageSize: 25,
+      totalCount: 0,
+      totalPages: 1
+    });
+  });
+
   it('devrait appeler GET /api/cards/{uid}/audit avec pagination serveur pour l\'administration', () => {
     service.getCardAudit('04A1B2C3D4E5F6', 1, 25).subscribe(res => {
       expect(res.cardUid).toBe('04A1B2C3D4E5F6');
