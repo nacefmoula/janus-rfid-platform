@@ -940,5 +940,29 @@ class ApiTests(unittest.TestCase):
         for r in expected_reasons:
             self.assertIn(r, raw_metrics)
 
+    def test_31_nginx_security_headers_and_server_tokens(self):
+        """31. JANUS-SEC-016 : Vérification des en-têtes de sécurité Nginx et masquage des versions."""
+        web_base = os.environ.get("JANUS_WEB_URL", "http://localhost:4280")
+        req = urllib.request.Request(web_base + "/")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+                # 1. En-têtes de sécurité essentiels
+                self.assertEqual(headers.get("x-content-type-options"), "nosniff")
+                self.assertEqual(headers.get("x-frame-options"), "DENY")
+                self.assertEqual(headers.get("referrer-policy"), "strict-origin-when-cross-origin")
+
+                # 2. Content Security Policy stricte et compatible Angular
+                csp = headers.get("content-security-policy", "")
+                self.assertIn("default-src 'self'", csp)
+                self.assertIn("frame-ancestors 'none'", csp)
+
+                # 3. Masquage de la version de serveur (server_tokens off)
+                server = headers.get("server", "")
+                self.assertEqual(server, "nginx")
+                self.assertNotIn("1.", server)
+        except urllib.error.URLError as e:
+            self.skipTest(f"Nginx web demonstrator not reachable on {web_base}: {e}")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
