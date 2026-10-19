@@ -74,8 +74,18 @@ export class JanusApiService {
   }
 
   /**
+   * JANUS-SEC-002: Vérifie la présence et le statut d'une carte sans exposer son solde ni ses transactions.
+   * Accessible aux rôles Terminal et Admin : GET /api/simulator/cards/{uid}/presence
+   */
+  getCardPresence(uid: string): Observable<{ uid: string; status: string }> {
+    return this.http.get<{ uid: string; status: string }>(
+      `${this.basePath}/api/simulator/cards/${encodeURIComponent(uid.trim())}/presence`
+    );
+  }
+
+  /**
    * Consulte le solde, le statut et l'historique de débit d'une carte spécifique.
-   * Requiert un token (Terminal ou Admin).
+   * JANUS-SEC-002: Requiert STRICTEMENT les droits Admin.
    * GET /api/cards/{uid}?limit={limit}&offset={offset}
    */
   getCard(uid: string, limit = 50, offset = 0): Observable<CardDetail> {

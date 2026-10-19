@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -124,15 +125,31 @@ public class SecurityHardeningTests : IAsyncLifetime
         // Arrange: Prepare test card
         var cardUid = await PrepareCardAsync(10000);
 
-        // Act 1: Terminal 2 queries card details
-        using var getReq = new HttpRequestMessage(HttpMethod.Get, $"/api/cards/{cardUid}");
-        getReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Terminal02Token);
-        var getResp = await _client.SendAsync(getReq);
+        // Act 1a: JANUS-SEC-002 BOLA Fix: Terminal 2 attempting to read full card details via /api/cards/{uid} is rejected with 403 Forbidden
+        using var bolaReq = new HttpRequestMessage(HttpMethod.Get, $"/api/cards/{cardUid}");
+        bolaReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Terminal02Token);
+        var bolaResp = await _client.SendAsync(bolaReq);
+        Assert.Equal(HttpStatusCode.Forbidden, bolaResp.StatusCode);
 
-        // Assert 1: SEC-02 resolved — Terminal 2 is recognized and authenticated
-        Assert.Equal(HttpStatusCode.OK, getResp.StatusCode);
-        var cardBody = await getResp.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(cardUid, cardBody.GetProperty("uid").GetString());
+        // Act 1b: Terminal 2 checks card presence via minimal endpoint /api/simulator/cards/{uid}/presence
+        using var presReq = new HttpRequestMessage(HttpMethod.Get, $"/api/simulator/cards/{cardUid}/presence");
+        presReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Terminal02Token);
+        var presResp = await _client.SendAsync(presReq);
+        Assert.Equal(HttpStatusCode.OK, presResp.StatusCode);
+        var presBody = await presResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(cardUid, presBody.GetProperty("uid").GetString());
+        Assert.Equal("Active", presBody.GetProperty("status").GetString());
+        Assert.False(presBody.TryGetProperty("balanceMillimes", out _));
+        Assert.False(presBody.TryGetProperty("transactions", out _));
+
+        // Act 1c: Admin caller can read full card details
+        using var adminReq = new HttpRequestMessage(HttpMethod.Get, $"/api/cards/{cardUid}");
+        adminReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AdminToken);
+        var adminResp = await _client.SendAsync(adminReq);
+        Assert.Equal(HttpStatusCode.OK, adminResp.StatusCode);
+        var adminBody = await adminResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(cardUid, adminBody.GetProperty("uid").GetString());
+        Assert.True(adminBody.TryGetProperty("balanceMillimes", out _));
 
         // Act 2: Terminal 2 submits a validation
         var eventId = Guid.NewGuid();
@@ -728,6 +745,149 @@ public class SecurityHardeningTests : IAsyncLifetime
         }
         Assert.Contains(HttpStatusCode.TooManyRequests, directSpoofStatuses);
     }
+
+    [Fact]
+    public async Task SEC_JANUS_011_ReadinessProbe_Returns200WithDatabaseConnected()
+    {
+        // Act: Query /health/ready without authentication
+        var response = await _client.GetAsync("/health/ready");
+
+        // Assert: Returns HTTP 200 with status: ready and database: connected
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ready", body.GetProperty("status").GetString());
+        Assert.Equal("janus-api", body.GetProperty("service").GetString());
+        Assert.Equal("connected", body.GetProperty("database").GetString());
+    }
+
+    [Fact]
+    public async Task SEC_JANUS_009_ExceptionHandler_ReturnsJsonWithTraceId_WithoutExposingStackTraceOrSecrets_InProduction()
+    {
+        // Arrange: Custom factory configured in Production environment with controlled fault testing enabled
+        using var prodFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Testing:EnableFaultEndpoint"] = "true",
+                    ["TerminalAuth:DemoToken"] = "prod-strong-terminal-key-32chars!",
+                    ["TerminalAuth:Terminal2Token"] = "prod-strong-terminal2-key-32chars!",
+                    ["AdminAuth:DemoToken"] = "prod-strong-admin-token-32chars!",
+                    ["MetricsAuth:ScrapeToken"] = "prod-strong-scrape-token-32chars!"
+                });
+            });
+        });
+        using var client = prodFactory.CreateClient();
+
+        // Act: Invoke the fault injection route that throws an unhandled exception
+        var response = await client.GetAsync("/test-fault/unhandled-exception");
+
+        // Assert:
+        // 1. HTTP 500 Internal Server Error
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+
+        // 2. Strict JSON contract: error, message, traceId
+        var rawJson = await response.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(rawJson).RootElement;
+        Assert.Equal("internal_error", body.GetProperty("error").GetString());
+        Assert.Equal("An unexpected error occurred.", body.GetProperty("message").GetString());
+
+        // 3. Non-empty traceId present
+        Assert.True(body.TryGetProperty("traceId", out var traceIdProp));
+        Assert.False(string.IsNullOrWhiteSpace(traceIdProp.GetString()));
+
+        // 4. Absolute absence of stack trace, internal exception message, and injected secret in response
+        Assert.False(body.TryGetProperty("stackTrace", out _));
+        Assert.False(body.TryGetProperty("details", out _));
+        Assert.DoesNotContain("stack", rawJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Simulated catastrophic crash", rawJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SUPER_SECRET_12345", rawJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SEC_JANUS_011_ReadinessProbe_Returns503_WhenDatabaseUnreachable_WithBoundedTimeout()
+    {
+        // Arrange: Create an isolated test host pointing to an unreachable database endpoint
+        using var unreachableDbFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = "Host=127.0.0.1;Port=5439;Database=janus_unreachable;Username=test;Password=test;Timeout=1;Command Timeout=1"
+                });
+            });
+        });
+        using var unreachableClient = unreachableDbFactory.CreateClient();
+
+        // Act: Measure execution duration and probe /health/ready
+        var sw = Stopwatch.StartNew();
+        var response = await unreachableClient.GetAsync("/health/ready");
+        sw.Stop();
+
+        // Assert:
+        // 1. HTTP 503 Service Unavailable
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("unhealthy", body.GetProperty("status").GetString());
+        Assert.Equal("janus-api", body.GetProperty("service").GetString());
+        Assert.Equal("disconnected", body.GetProperty("database").GetString());
+
+        // 2. Bounded timeout: The request MUST NOT hang indefinitely (must complete within ~3.5 seconds)
+        Assert.True(sw.Elapsed.TotalSeconds < 3.5, $"Readiness probe took {sw.Elapsed.TotalSeconds:F2}s, exceeding the expected bound.");
+
+        // 3. Return to HTTP 200 when database connectivity is restored
+        var config = unreachableDbFactory.Services.GetRequiredService<IConfiguration>();
+        var validConn = _factory.Services.GetRequiredService<IConfiguration>().GetConnectionString("JanusDb");
+        config["ConnectionStrings:JanusDb"] = validConn;
+
+        var recoveredResp = await unreachableClient.GetAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, recoveredResp.StatusCode);
+        var recoveredBody = await recoveredResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ready", recoveredBody.GetProperty("status").GetString());
+        Assert.Equal("connected", recoveredBody.GetProperty("database").GetString());
+    }
+
+    [Fact]
+    public async Task SEC_JANUS_011_LivenessProbe_RemainsHealthy_WhenDatabaseIsDown()
+    {
+        // Arrange: Isolated factory with broken database connection
+        using var unreachableDbFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = "Host=127.0.0.1;Port=5439;Database=janus_unreachable;Username=test;Password=test;Timeout=1;Command Timeout=1"
+                });
+            });
+        });
+        using var unreachableClient = unreachableDbFactory.CreateClient();
+
+        // Act: Call liveness endpoints while database is unreachable
+        var liveResp = await unreachableClient.GetAsync("/health/live");
+        var healthResp = await unreachableClient.GetAsync("/health");
+        var readyResp = await unreachableClient.GetAsync("/health/ready");
+
+        // Assert:
+        // Liveness endpoints succeed immediately without database dependency
+        Assert.Equal(HttpStatusCode.OK, liveResp.StatusCode);
+        var liveBody = await liveResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("live", liveBody.GetProperty("status").GetString());
+
+        Assert.Equal(HttpStatusCode.OK, healthResp.StatusCode);
+        var healthBody = await healthResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("healthy", healthBody.GetProperty("status").GetString());
+
+        // Concurrently, readiness fails with 503
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, readyResp.StatusCode);
+    }
+
 
     private sealed class SimulatedRemoteIpStartupFilter : IStartupFilter
     {

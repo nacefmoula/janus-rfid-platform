@@ -9,3 +9,5 @@ dist/
 .angular/
 coverage/
 .sonarqube/
+monitoring/prometheus/metrics_token
+*.token

@@ -107,11 +107,11 @@ jobs:
 
       - name: Wait for Janus API availability
         run: |
-          echo "Attente de la disponibilité de l'API Janus sur $JANUS_BASE_URL/health..."
+          echo "Attente de la disponibilité de l'API Janus sur $JANUS_BASE_URL/health/ready..."
           for i in {1..30}; do
-            if curl -sf "$JANUS_BASE_URL/health" > /dev/null 2>&1; then
-              echo "✔ API Janus opérationnelle !"
-              curl -s "$JANUS_BASE_URL/health"
+            if curl -sf "$JANUS_BASE_URL/health/ready" > /dev/null 2>&1; then
+              echo "✔ API Janus opérationnelle et base de données connectée !"
+              curl -s "$JANUS_BASE_URL/health/ready"
               echo ""
               exit 0
             fi
@@ -219,35 +219,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Build Docker image from Dockerfile
+      - name: Build Docker images for Janus API and Web
         run: |
           docker build -t janus-api:${{ github.sha }} src/Janus.Api
+          docker build -t janus-web:${{ github.sha }} src/Janus.Web
 
-      # Étape 1 : Génération du rapport SARIF pour audit complet (sévérités HIGH et CRITICAL).
+      # Étape 1 : Génération des rapports SARIF pour audit complet (sévérités HIGH et CRITICAL).
       # ignore-unfixed: true filtre les vulnérabilités amont sans correctif éditeur disponible.
-      - name: Generate Trivy SARIF report (HIGH & CRITICAL)
+      - name: Generate Trivy SARIF report for API (HIGH & CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
           format: 'sarif'
-          output: 'trivy-results.sarif'
+          output: 'trivy-results-api.sarif'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
-      # Étape 2 : Publication du rapport SARIF vers l'onglet GitHub Security (Code scanning alerts).
-      # Note : continue-on-error: true est requis si le dépôt est privé sans licence GitHub Advanced Security (GHAS).
-      # Sur un dépôt public ou avec licence GHAS, le rapport est publié sans interruption.
-      - name: Upload Trivy SARIF to GitHub Security tab
+      - name: Generate Trivy SARIF report for Web (HIGH & CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'janus-web:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results-web.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      # Étape 2 : Publication des rapports SARIF vers l'onglet GitHub Security (Code scanning alerts).
+      - name: Upload Trivy SARIF (API) to GitHub Security tab
         uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3.39.0
         if: always()
         continue-on-error: true
         with:
-          sarif_file: 'trivy-results.sarif'
-          category: 'trivy-container-security'
+          sarif_file: 'trivy-results-api.sarif'
+          category: 'trivy-container-security-api'
+
+      - name: Upload Trivy SARIF (Web) to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3.39.0
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results-web.sarif'
+          category: 'trivy-container-security-web'
 
       # Étape 3 : Affichage du résumé tabulaire lisible dans la console de CI pour les sévérités HIGH et CRITICAL.
-      - name: Display Trivy audit summary in CI logs (HIGH & CRITICAL)
+      - name: Display Trivy audit summary for API in CI logs (HIGH & CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
@@ -256,13 +273,32 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
 
+      - name: Display Trivy audit summary for Web in CI logs (HIGH & CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'janus-web:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
       # Étape 4 : Contrôle bloquant de sécurité (Quality Gate).
       # Politique de blocage : Seules les vulnérabilités CRITICAL avec un correctif disponible (actionnables)
-      # provoquent l'échec du job (exit-code: 1). Les vulnérabilités HIGH sont signalées et auditées sans bloquer la pipeline.
-      - name: Enforce Trivy security gate (Fail ONLY on actionable CRITICAL vulnerabilities)
+      # provoquent l'échec du job (exit-code: 1).
+      - name: Enforce Trivy security gate for API (Fail ONLY on actionable CRITICAL vulnerabilities)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'janus-api:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Enforce Trivy security gate for Web (Fail ONLY on actionable CRITICAL vulnerabilities)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'janus-web:${{ github.sha }}'
           format: 'table'
           exit-code: '1'
           severity: 'CRITICAL'

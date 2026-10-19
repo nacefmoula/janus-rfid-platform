@@ -203,4 +203,18 @@ describe('JanusApiService', () => {
       totalPages: 1
     });
   });
+
+  it('devrait appeler GET /api/simulator/cards/{uid}/presence pour vérifier le statut sans solde', () => {
+    service.getCardPresence('04A1B2C3D4E5F6').subscribe(res => {
+      expect(res.uid).toBe('04A1B2C3D4E5F6');
+      expect(res.status).toBe('Active');
+    });
+
+    const req = httpMock.expectOne('/api/simulator/cards/04A1B2C3D4E5F6/presence');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      uid: '04A1B2C3D4E5F6',
+      status: 'Active'
+    });
+  });
 });

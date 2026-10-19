@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -250,7 +251,31 @@ if (configuredTokens.Count != configuredTokens.Distinct(StringComparer.Ordinal).
     throw new InvalidOperationException("Security configuration error: Distinct tokens are required across Terminal1, Terminal2, Admin, and MetricsScrape.");
 }
 
-// REV-03: Ordre strict du pipeline : Routing -> ForwardedHeaders (si proxies/réseaux de confiance configurés) -> Authentication -> RateLimiter -> Authorization
+// JANUS-SEC-009: Gestionnaire d'exception global retournant une réponse JSON standardisée avec traceId et masquant les piles d'appels internes
+app.UseExceptionHandler(exceptionHandlerApp =>
+{
+    exceptionHandlerApp.Run(async context =>
+    {
+        var exceptionHandlerFeature = context.Features.Get<IExceptionHandlerFeature>();
+        var exception = exceptionHandlerFeature?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        var traceId = Activity.Current?.Id ?? context.TraceIdentifier;
+
+        logger.LogError(exception, "Unhandled exception occurred. TraceId: {TraceId}", traceId);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = "internal_error",
+            message = "An unexpected error occurred.",
+            traceId = traceId
+        });
+    });
+});
+
+// REV-03: Ordre strict du pipeline : ExceptionHandler -> Routing -> ForwardedHeaders -> Authentication -> RateLimiter -> Authorization
 app.UseRouting();
 if (!string.IsNullOrWhiteSpace(app.Configuration["ReverseProxy:TrustedProxies"]) ||
     !string.IsNullOrWhiteSpace(app.Configuration["ReverseProxy:TrustedNetworks"]))
@@ -265,28 +290,66 @@ app.MapPrometheusScrapingEndpoint()
     .RequireAuthorization("MetricsScrape")
     .RequireRateLimiting("CardsReadPolicy");
 
-await using (var scope = app.Services.CreateAsyncScope()) {
-    var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
-    for (int attempt = 0; ; attempt++) {
-        try {
-            await db.Database.MigrateAsync();
-            // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
-            if (app.Environment.IsDevelopment() && !await db.Cards.AnyAsync()) {
-                db.Cards.AddRange(
-                    new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
-                    new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
-                );
-                await db.SaveChangesAsync();
+if (!app.Configuration.GetValue<bool>("Database:SkipMigration", false))
+{
+    await using (var scope = app.Services.CreateAsyncScope()) {
+        var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                await db.Database.MigrateAsync();
+                // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
+                if (app.Environment.IsDevelopment() && !await db.Cards.AnyAsync()) {
+                    db.Cards.AddRange(
+                        new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
+                        new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
+                    );
+                    await db.SaveChangesAsync();
+                }
+                break;
+            } catch when (attempt < 29) {
+                await Task.Delay(TimeSpan.FromSeconds(2));
             }
-            break;
-        } catch when (attempt < 29) {
-            await Task.Delay(TimeSpan.FromSeconds(2));
         }
     }
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "janus-api" }))
     .AllowAnonymous();
+
+// Liveness probe standardisée (vérifie que le runtime ASP.NET Core répond sans dépendance externe)
+app.MapGet("/health/live", () => Results.Ok(new { status = "live", service = "janus-api" }))
+    .AllowAnonymous();
+
+// JANUS-SEC-011: Sonde de readiness vérifiant la connectivité effective à la base de données PostgreSQL
+app.MapGet("/health/ready", async (JanusDbContext db, ILogger<Program> logger) =>
+{
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var canConnect = await db.Database.CanConnectAsync(cts.Token);
+        if (canConnect)
+        {
+            return Results.Ok(new { status = "ready", service = "janus-api", database = "connected" });
+        }
+
+        logger.LogWarning("Readiness probe: Database.CanConnectAsync returned false.");
+        return Results.Json(new { status = "unhealthy", service = "janus-api", database = "disconnected" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Readiness probe exception: unable to connect to database.");
+        return Results.Json(new { status = "unhealthy", service = "janus-api", database = "disconnected", error = "database_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+})
+    .AllowAnonymous();
+
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Testing:EnableFaultEndpoint", false))
+{
+    app.MapGet("/test-fault/unhandled-exception", () =>
+    {
+        throw new InvalidOperationException("Simulated catastrophic crash in internal service. SecretValue=SUPER_SECRET_12345");
+    }).AllowAnonymous();
+}
 
 // PAG-01: Endpoint administratif paginé pour l'inventaire des cartes (avec filtres recherche et statut, tri déterministe)
 app.MapGet("/api/cards", async (HttpRequest http, JanusDbContext db) => {
@@ -390,6 +453,23 @@ app.MapGet("/api/simulator/cards", async (HttpRequest http, JanusDbContext db) =
     .RequireAuthorization("CardsRead")
     .RequireRateLimiting("CardsReadPolicy");
 
+// JANUS-SEC-002: Endpoint minimal de vérification de présence pour le simulateur et les valideurs (masque le solde et les transactions)
+app.MapGet("/api/simulator/cards/{uid}/presence", async (string uid, JanusDbContext db) => {
+    if (string.IsNullOrWhiteSpace(uid) || uid.Length > 64)
+        return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
+
+    var normalized = uid.Trim().ToUpperInvariant();
+    var card = await db.Cards.AsNoTracking().SingleOrDefaultAsync(c => c.Uid == normalized);
+    if (card is null) return Results.NotFound(new { error = "card_not_found" });
+
+    return Results.Ok(new {
+        uid = card.Uid,
+        status = card.Status.ToString()
+    });
+})
+    .RequireAuthorization("CardsRead")
+    .RequireRateLimiting("CardsReadPolicy");
+
 // REV-02 / FIN-03: Endpoint métier synthétique pour le dashboard (agrégats SQL regroupés + compteur mémoire explicite pour les rejets 409 non persistés en base)
 app.MapGet("/api/dashboard/summary", async (JanusDbContext db) => {
     var validationCounts = await db.Validations.AsNoTracking()
@@ -459,7 +539,8 @@ app.MapGet("/api/cards/{uid}", async (string uid, HttpRequest http, JanusDbConte
         offset,
         transactions = txs
     });
-}).RequireAuthorization("CardsRead").RequireRateLimiting("CardsReadPolicy");
+// JANUS-SEC-002: L'accès aux détails financiers et à l'historique complet est strictement restreint aux administrateurs
+}).RequireAuthorization("AdminOnly").RequireRateLimiting("AdminPolicy");
 
 app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusDbContext db) => {
     if (string.IsNullOrWhiteSpace(uid) || uid.Length > 64)

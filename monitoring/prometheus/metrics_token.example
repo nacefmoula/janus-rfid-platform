@@ -1,0 +1,4 @@
+# Fichier exemple de jeton pour le scraping Prometheus (JANUS-SEC-005)
+# En production, montez ce secret via Docker Secrets ou un fichier externe hors dépôt Git.
+# Exemple :
+dev-metrics-scrape-token-change-me

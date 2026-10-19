@@ -47,9 +47,12 @@ def call(path, method="GET", payload=None, token=TERMINAL_TOKEN, custom_headers=
                 body = raw
             return code, body
 
-def get_card(uid, token=TERMINAL_TOKEN, query=""):
+def get_card(uid, token=ADMIN_TOKEN, query=""):
     q = f"?{query}" if query else ""
     return call(f"/api/cards/{uid}{q}", token=token)
+
+def get_presence(uid, token=TERMINAL_TOKEN):
+    return call(f"/api/simulator/cards/{uid}/presence", token=token)
 
 def get_audit(uid, token=ADMIN_TOKEN, limit=None, offset=None, query=""):
     params = []
@@ -92,6 +95,19 @@ class ApiTests(unittest.TestCase):
         s, b = call("/health")
         self.assertEqual(s, 200)
         self.assertEqual(b["status"], "healthy")
+        self.assertEqual(b["service"], "janus-api")
+
+    def test_health_ready(self):
+        s, b = call("/health/ready")
+        self.assertEqual(s, 200)
+        self.assertEqual(b["status"], "ready")
+        self.assertEqual(b["service"], "janus-api")
+        self.assertEqual(b["database"], "connected")
+
+    def test_health_live(self):
+        s, b = call("/health/live")
+        self.assertEqual(s, 200)
+        self.assertEqual(b["status"], "live")
         self.assertEqual(b["service"], "janus-api")
 
     def test_active_card(self):
@@ -649,11 +665,22 @@ class ApiTests(unittest.TestCase):
         s_none, _ = get_audit(uid, token=None)
         self.assertEqual(s_none, 401)
 
-        # 4. Terminal token sur GET /api/cards/{uid} -> 200 OK sans auditLogs
+        # 4. JANUS-SEC-002: Terminal token sur GET /api/cards/{uid} -> 403 Forbidden (protection anti-BOLA)
         s_card_term, b_card_term = get_card(uid, token=TERMINAL_TOKEN)
-        self.assertEqual(s_card_term, 200)
-        self.assertEqual(b_card_term["uid"], uid)
-        self.assertNotIn("auditLogs", b_card_term)
+        self.assertEqual(s_card_term, 403)
+        self.assertEqual(b_card_term.get("error"), "forbidden")
+
+        # 4b. Terminal token sur GET /api/simulator/cards/{uid}/presence -> 200 OK (présence sans solde)
+        s_pres, b_pres = get_presence(uid, token=TERMINAL_TOKEN)
+        self.assertEqual(s_pres, 200)
+        self.assertEqual(b_pres["uid"], uid)
+        self.assertNotIn("balanceMillimes", b_pres)
+
+        # 4c. Admin token sur GET /api/cards/{uid} -> 200 OK sans auditLogs
+        s_card_admin, b_card_admin = get_card(uid, token=ADMIN_TOKEN)
+        self.assertEqual(s_card_admin, 200)
+        self.assertEqual(b_card_admin["uid"], uid)
+        self.assertNotIn("auditLogs", b_card_admin)
 
         # 5. Admin token sur GET /api/cards/{uid}/audit -> 200 OK avec pagination
         s_aud, b_aud = get_audit(uid, token=ADMIN_TOKEN)
@@ -787,12 +814,16 @@ class ApiTests(unittest.TestCase):
     # --- Nouveaux tests Lot 2 : Sécurité applicative, authentification et autorisations ---
 
     def test_24_terminal_02_can_read_card_details(self):
-        """24. SEC-02 : TERMINAL-DEMO-02 peut légitimement consulter les détails d'une carte (résolution incohérence)."""
+        """24. JANUS-SEC-002 : TERMINAL-DEMO-02 est rejeté avec 403 sur /api/cards/{uid} (anti-BOLA) mais peut vérifier la présence via /api/simulator/cards/{uid}/presence."""
         uid = "04A1B2C3D4E5F6"
-        s, b = get_card(uid, token=TERMINAL_02_TOKEN)
-        self.assertEqual(s, 200)
-        self.assertEqual(b["uid"], uid)
-        self.assertIn("balanceMillimes", b)
+        s_bola, b_bola = get_card(uid, token=TERMINAL_02_TOKEN)
+        self.assertEqual(s_bola, 403)
+        self.assertEqual(b_bola.get("error"), "forbidden")
+
+        s_pres, b_pres = get_presence(uid, token=TERMINAL_02_TOKEN)
+        self.assertEqual(s_pres, 200)
+        self.assertEqual(b_pres["uid"], uid)
+        self.assertNotIn("balanceMillimes", b_pres)
 
     def test_25_demo_cards_endpoint_security(self):
         """25. SEC-01 : GET /api/demo/cards exige les droits administrateur (refus anonyme 401 et terminal 403)."""
