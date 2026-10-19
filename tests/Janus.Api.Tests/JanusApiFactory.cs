@@ -18,14 +18,25 @@ public class JanusApiFactory : WebApplicationFactory<Program>
     public static string AdminToken => Environment.GetEnvironmentVariable("ADMIN_DEMO_TOKEN") ?? "dev-admin-token-change-me";
     public static string ScrapeToken => Environment.GetEnvironmentVariable("METRICS_SCRAPE_TOKEN") ?? "dev-metrics-scrape-token-change-me";
 
+    public string RuntimeConnectionString { get; private set; } = "";
+    public string MigrationConnectionString { get; private set; } = "";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((context, config) =>
         {
             var dbConn = Environment.GetEnvironmentVariable("ConnectionStrings__JanusDb")
                 ?? (Environment.GetEnvironmentVariable("POSTGRES_DB") != null
-                    ? $"Host=localhost;Port=5433;Database={Environment.GetEnvironmentVariable("POSTGRES_DB")};Username={Environment.GetEnvironmentVariable("POSTGRES_USER")};Password={Environment.GetEnvironmentVariable("POSTGRES_PASSWORD")}"
+                    ? $"Host=localhost;Port=5433;Database={Environment.GetEnvironmentVariable("POSTGRES_DB")};Username={Environment.GetEnvironmentVariable("POSTGRES_RUNTIME_USER") ?? "janus_runtime"};Password={Environment.GetEnvironmentVariable("POSTGRES_RUNTIME_PASSWORD") ?? "local-dev-runtime-password-change-me"}"
+                    : "Host=localhost;Port=5433;Database=janus_db;Username=janus_runtime;Password=local-dev-runtime-password-change-me");
+
+            var migrationConn = Environment.GetEnvironmentVariable("ConnectionStrings__MigrationDb")
+                ?? (Environment.GetEnvironmentVariable("POSTGRES_DB") != null
+                    ? $"Host=localhost;Port=5433;Database={Environment.GetEnvironmentVariable("POSTGRES_DB")};Username={Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "janus_app"};Password={Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? "local-dev-db-password-change-me"}"
                     : "Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password=local-dev-db-password-change-me");
+
+            RuntimeConnectionString = dbConn;
+            MigrationConnectionString = migrationConn;
 
             var termToken = Environment.GetEnvironmentVariable("TERMINAL_DEMO_TOKEN") ?? "dev-terminal-token-change-me";
             var term2Token = Environment.GetEnvironmentVariable("TERMINAL_02_TOKEN") ?? "dev-terminal-02-token-change-me";
@@ -35,6 +46,7 @@ public class JanusApiFactory : WebApplicationFactory<Program>
             var dict = new Dictionary<string, string?>
             {
                 ["ConnectionStrings:JanusDb"] = dbConn,
+                ["ConnectionStrings:MigrationDb"] = migrationConn,
                 ["TerminalAuth:DemoToken"] = termToken,
                 ["TerminalAuth:Terminal2Token"] = term2Token,
                 ["AdminAuth:DemoToken"] = adminToken,
@@ -61,5 +73,13 @@ public class JanusApiFactory : WebApplicationFactory<Program>
     {
         var scope = Services.CreateScope();
         return scope.ServiceProvider.GetRequiredService<JanusDbContext>();
+    }
+
+    public JanusDbContext CreateMigrationDbContext()
+    {
+        var options = new DbContextOptionsBuilder<JanusDbContext>()
+            .UseNpgsql(MigrationConnectionString)
+            .Options;
+        return new JanusDbContext(options);
     }
 }

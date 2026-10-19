@@ -182,8 +182,8 @@ def main():
     # ---------------------------------------------------------
     step("ÉTAPE 7 : Traçabilité et Audit — Contrôle RBAC & Cohérence Ledger")
     # ---------------------------------------------------------
-    print(f"1) Consultation de la carte par la borne GET /api/cards/{card_uid} (Données billettiques uniquement) :")
-    status, body = http_call(f"/api/cards/{card_uid}", token=TERMINAL_TOKEN)
+    print(f"1) Consultation de la carte par l'administrateur GET /api/cards/{card_uid} (Données billettiques et financières) :")
+    status, body = http_call(f"/api/cards/{card_uid}", token=ADMIN_TOKEN)
     print(f"HTTP {status} : transactionsCount={body.get('transactionsCount')}, solde={body.get('balanceMillimes')}")
     print(f"Nombre de transactions enregistrées dans le registre financier : {len(body.get('transactions', []))}")
     assert "auditLogs" not in body, "Fuite de journaux d'audit vers le terminal !"

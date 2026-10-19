@@ -290,24 +290,53 @@ app.MapPrometheusScrapingEndpoint()
     .RequireAuthorization("MetricsScrape")
     .RequireRateLimiting("CardsReadPolicy");
 
+// JANUS-SEC-018 / Lot 2B: Séparation stricte entre rôle de migration (DDL) et rôle runtime (DML moindre privilège)
 if (!app.Configuration.GetValue<bool>("Database:SkipMigration", false))
 {
-    await using (var scope = app.Services.CreateAsyncScope()) {
-        var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
+    var migrationConn = app.Configuration.GetConnectionString("MigrationDb");
+    if (!string.IsNullOrWhiteSpace(migrationConn))
+    {
+        var migrationOptions = new DbContextOptionsBuilder<JanusDbContext>()
+            .UseNpgsql(migrationConn)
+            .Options;
+
         for (int attempt = 0; ; attempt++) {
             try {
-                await db.Database.MigrateAsync();
+                await using var migrationDb = new JanusDbContext(migrationOptions);
+                await migrationDb.Database.MigrateAsync();
                 // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
-                if (app.Environment.IsDevelopment() && !await db.Cards.AnyAsync()) {
-                    db.Cards.AddRange(
+                if (app.Environment.IsDevelopment() && !await migrationDb.Cards.AnyAsync()) {
+                    migrationDb.Cards.AddRange(
                         new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
                         new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
                     );
-                    await db.SaveChangesAsync();
+                    await migrationDb.SaveChangesAsync();
                 }
                 break;
             } catch when (attempt < 29) {
                 await Task.Delay(TimeSpan.FromSeconds(2));
+            }
+        }
+    }
+    else
+    {
+        await using (var scope = app.Services.CreateAsyncScope()) {
+            var db = scope.ServiceProvider.GetRequiredService<JanusDbContext>();
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    await db.Database.MigrateAsync();
+                    // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
+                    if (app.Environment.IsDevelopment() && !await db.Cards.AnyAsync()) {
+                        db.Cards.AddRange(
+                            new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
+                            new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
+                        );
+                        await db.SaveChangesAsync();
+                    }
+                    break;
+                } catch when (attempt < 29) {
+                    await Task.Delay(TimeSpan.FromSeconds(2));
+                }
             }
         }
     }
