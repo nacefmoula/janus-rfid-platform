@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, EventEmitter, Output, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router } from '@angular/router';
@@ -14,8 +14,23 @@ import { NotificationService } from '../../../core/services/notification.service
   template: `
     <header class="app-header">
       <div class="header-left">
-        <h1 class="page-title">{{ currentPageTitle() }}</h1>
-        <span class="page-subtitle">{{ currentPageSubtitle() }}</span>
+        <!-- Bouton hamburger pour affichage responsive -->
+        <button
+          type="button"
+          class="mobile-menu-btn"
+          (click)="toggleSidebar.emit()"
+          aria-label="Ouvrir le menu de navigation">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+
+        <div class="title-wrap">
+          <h1 class="page-title">{{ currentPageTitle() }}</h1>
+          <span class="page-subtitle">{{ currentPageSubtitle() }}</span>
+        </div>
       </div>
 
       <div class="header-right">
@@ -26,8 +41,14 @@ import { NotificationService } from '../../../core/services/notification.service
         </div>
 
         <!-- Bouton de gestion de la session en mémoire -->
-        <button type="button" class="btn btn-secondary session-trigger" (click)="toggleModal()" title="Paramétrer les jetons de démonstration">
-          <span class="icon">🔑</span>
+        <button
+          type="button"
+          class="btn btn-secondary session-trigger"
+          (click)="toggleModal()"
+          title="Paramétrer les jetons de démonstration">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 2l-2 2m-1.5 1.5L14 9l-1.5-1.5L10 10l1.5 1.5-4 4H4v3h3l4-4 1.5 1.5 2.5-2.5L15 10l3.5-3.5L20 8l2-2-1-1z"/>
+          </svg>
           <span>Session & Rôles</span>
         </button>
       </div>
@@ -36,18 +57,28 @@ import { NotificationService } from '../../../core/services/notification.service
     <!-- Modal des jetons de test en mémoire vive -->
     @if (showModal()) {
       <div class="modal-backdrop" (click)="toggleModal()">
-        <div class="modal-dialog" (click)="$event.stopPropagation()">
+        <div class="modal-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
           <div class="modal-header">
-            <h3>🔑 Configuration de Session de Test</h3>
-            <button type="button" class="close-btn" (click)="toggleModal()" aria-label="Fermer">✕</button>
+            <div class="modal-title-wrap">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary" aria-hidden="true">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <h3 id="modalTitle">Configuration de Session d'Exploitation</h3>
+            </div>
+            <button type="button" class="close-btn" (click)="toggleModal()" aria-label="Fermer la boîte de dialogue">✕</button>
           </div>
 
           <div class="modal-body">
             <div class="notice-box">
-              <span class="notice-icon">🔒</span>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="notice-svg" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
               <p>
-                <strong>Sécurité & Confidentialité :</strong> Aucun jeton n'est stocké dans le navigateur (pas de <code>localStorage</code>).
-                Les identifiants saisis ici restent en mémoire vive pour tester les contrôles d'accès réels de l'API Janus.
+                <strong>Sécurité & Confidentialité :</strong> Aucun jeton n'est persisté sur le disque ou dans le navigateur (pas de <code>localStorage</code>).
+                Les identifiants restent en mémoire vive pour tester les contrôles d'accès réels de l'API Janus.
               </p>
             </div>
 
@@ -109,7 +140,11 @@ import { NotificationService } from '../../../core/services/notification.service
 
             @if (sessionError()) {
               <div class="session-error-box" role="alert">
-                <span aria-hidden="true">⚠️</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
                 <span>{{ sessionError() }}</span>
               </div>
             }
@@ -131,10 +166,10 @@ import { NotificationService } from '../../../core/services/notification.service
   `,
   styles: [`
     .app-header {
-      height: 70px;
+      height: 64px;
       background-color: var(--bg-surface);
       border-bottom: 1px solid var(--border-light);
-      padding: 0 32px;
+      padding: 0 28px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -146,123 +181,171 @@ import { NotificationService } from '../../../core/services/notification.service
 
     .header-left {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
     }
-    .page-title {
-      font-size: 1.25rem;
-      font-weight: 800;
+
+    .mobile-menu-btn {
+      display: none;
+      background: transparent;
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
       color: var(--color-text-main);
-      line-height: 1.2;
+      padding: 6px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
     }
+    .mobile-menu-btn:hover {
+      background-color: var(--bg-surface-subtle);
+    }
+
+    .title-wrap {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .page-title {
+      font-size: 1.0625rem;
+      font-weight: 700;
+      color: var(--color-text-main);
+      line-height: 1.25;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .page-subtitle {
-      font-size: 0.8125rem;
-      color: var(--color-text-muted);
+      font-size: 0.75rem;
+      color: var(--color-text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .header-right {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 14px;
+      flex-shrink: 0;
     }
 
     .health-pill {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 14px;
+      padding: 5px 12px;
       border-radius: var(--radius-full);
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
       background-color: var(--bg-surface-subtle);
       border: 1px solid var(--border-light);
     }
     .health-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
+      flex-shrink: 0;
     }
     .health-pill.healthy .health-dot {
       background-color: var(--color-success);
-      box-shadow: 0 0 6px var(--color-success);
     }
     .health-pill.unhealthy .health-dot {
       background-color: var(--color-danger);
-      box-shadow: 0 0 6px var(--color-danger);
     }
 
     .session-trigger {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
+      padding: 6px 12px;
     }
 
-    /* Modal */
+    /* Modal de configuration */
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(9, 30, 66, 0.54);
+      background: rgba(15, 23, 42, 0.55);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 1100;
       backdrop-filter: blur(2px);
+      padding: 16px;
     }
 
     .modal-dialog {
       background: var(--bg-surface);
       border-radius: var(--radius-lg);
       width: 100%;
-      max-width: 520px;
+      max-width: 500px;
       box-shadow: var(--shadow-lg);
       overflow: hidden;
+      border: 1px solid var(--border-light);
       animation: modalFadeIn 0.15s ease-out;
     }
     @keyframes modalFadeIn {
-      from { transform: scale(0.96); opacity: 0; }
+      from { transform: scale(0.97); opacity: 0; }
       to { transform: scale(1); opacity: 1; }
     }
 
     .modal-header {
-      padding: 16px 24px;
-      border-bottom: 1px solid var(--border-light);
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border-subtle);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      background-color: var(--bg-surface-subtle);
+    }
+    .modal-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
     .modal-header h3 {
-      font-size: 1.1rem;
+      font-size: 0.9375rem;
       font-weight: 700;
       color: var(--color-text-main);
     }
     .close-btn {
       background: transparent;
       border: none;
-      font-size: 1.25rem;
+      font-size: 1.1rem;
       color: var(--color-text-dim);
       cursor: pointer;
+      padding: 4px;
+      border-radius: var(--radius-sm);
+    }
+    .close-btn:hover {
+      color: var(--color-text-main);
+      background-color: var(--bg-surface-hover);
     }
 
     .modal-body {
-      padding: 24px;
+      padding: 20px;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
 
     .notice-box {
       background-color: var(--color-info-bg);
       border: 1px solid var(--color-info-border);
       border-radius: var(--radius-md);
-      padding: 12px 14px;
+      padding: 10px 12px;
       display: flex;
       gap: 10px;
       color: var(--color-info-text);
-      font-size: 0.8125rem;
-      line-height: 1.4;
+      font-size: 0.75rem;
+      line-height: 1.45;
     }
-    .notice-icon {
-      font-size: 1.2rem;
+    .notice-svg {
       flex-shrink: 0;
+      color: var(--color-info);
+      margin-top: 2px;
     }
 
     .form-group {
@@ -271,7 +354,7 @@ import { NotificationService } from '../../../core/services/notification.service
       gap: 4px;
     }
     .field-hint {
-      font-size: 0.75rem;
+      font-size: 0.6875rem;
       color: var(--color-text-dim);
     }
 
@@ -281,7 +364,7 @@ import { NotificationService } from '../../../core/services/notification.service
       gap: 8px;
     }
     .role-card {
-      padding: 10px 8px;
+      padding: 8px 6px;
       background: var(--bg-surface-subtle);
       border: 1px solid var(--border-light);
       border-radius: var(--radius-md);
@@ -291,13 +374,14 @@ import { NotificationService } from '../../../core/services/notification.service
     }
     .role-card strong {
       display: block;
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
       color: var(--color-text-main);
     }
     .role-card small {
       display: block;
-      font-size: 0.7rem;
+      font-size: 0.65rem;
       color: var(--color-text-muted);
+      margin-top: 2px;
     }
     .role-card.active {
       background-color: var(--color-primary-light);
@@ -312,8 +396,8 @@ import { NotificationService } from '../../../core/services/notification.service
       border: 1px solid var(--color-danger-border);
       color: var(--color-danger-text);
       border-radius: var(--radius-md);
-      padding: 10px 12px;
-      font-size: 0.8125rem;
+      padding: 8px 12px;
+      font-size: 0.75rem;
       font-weight: 600;
       display: flex;
       align-items: center;
@@ -322,30 +406,52 @@ import { NotificationService } from '../../../core/services/notification.service
 
     .helpers-row {
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
-      margin-top: 8px;
+      margin-top: 4px;
     }
     .btn-text-danger {
       background: none;
       border: none;
       color: var(--color-danger);
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
       font-weight: 600;
       cursor: pointer;
+      padding: 4px 0;
+    }
+    .btn-text-danger:hover {
+      text-decoration: underline;
     }
 
     .modal-footer {
-      padding: 16px 24px;
+      padding: 12px 20px;
       background-color: var(--bg-surface-subtle);
       border-top: 1px solid var(--border-light);
       display: flex;
       justify-content: flex-end;
-      gap: 12px;
+      gap: 10px;
+    }
+
+    /* Media query responsive */
+    @media (max-width: 1023px) {
+      .mobile-menu-btn {
+        display: inline-flex;
+      }
+      .app-header {
+        padding: 0 16px;
+      }
+      .health-label {
+        display: none;
+      }
+      .health-pill {
+        padding: 6px;
+      }
     }
   `]
 })
 export class HeaderComponent implements OnInit, OnDestroy {
+  @Output() toggleSidebar = new EventEmitter<void>();
+
   private readonly router = inject(Router);
   private readonly api = inject(JanusApiService);
   readonly session = inject(SessionService);

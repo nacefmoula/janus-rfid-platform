@@ -11,11 +11,21 @@
     </div>
     <div class="toolbar-actions">
       <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
-        <span>📈 Ouvrir Grafana</span>
-        <span class="ext-icon">↗</span>
+        <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="18" y1="20" x2="18" y2="10"/>
+          <line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+        <span>Supervision Grafana</span>
+        <svg class="ext-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/>
+        </svg>
       </a>
       <button type="button" class="btn btn-primary" (click)="loadDashboardData()" [disabled]="isLoading()">
-        🔄 Actualiser les données
+        <svg class="btn-icon" [class.spin]="isLoading()" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+        </svg>
+        <span>Actualiser les données</span>
       </button>
     </div>
   </div>
@@ -23,10 +33,15 @@
   <!-- Message d'attente pour rôle Visiteur Anonyme -->
   @if (session.activeRole() === 'ANONYMOUS') {
     <div class="anonymous-session-banner">
-      <span class="banner-icon" aria-hidden="true">🔒</span>
+      <span class="banner-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </span>
       <div class="banner-content">
         <strong>Session requise pour les indicateurs d'exploitation :</strong>
-        <span>Le profil actif est actuellement <em>Visiteur (Anonyme)</em>. Cliquez sur <strong>« Session & Rôles »</strong> dans l'en-tête pour configurer un jeton de démonstration (Opérateur Borne ou Administrateur) et déverrouiller la synthèse d'exploitation.</span>
+        <span>Le profil actif est actuellement <em>Visiteur (Anonyme)</em>. Cliquez sur <strong>« Session &amp; Rôles »</strong> dans l'en-tête pour configurer un jeton de démonstration (Opérateur Borne ou Administrateur) et déverrouiller la synthèse d'exploitation.</span>
       </div>
     </div>
   }
@@ -34,7 +49,13 @@
   <!-- Message d'erreur éventuel -->
   @if (errorMessage()) {
     <div class="error-banner">
-      <span class="error-icon" aria-hidden="true">⚠️</span>
+      <span class="error-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </span>
       <div class="error-text">
         <strong>Avertissement :</strong> {{ errorMessage() }}
         <span>Vérifiez que le service <code>janus-api</code> est bien démarré sur le port 5080.</span>
@@ -44,20 +65,25 @@
 
   <!-- Note méthodologique de distinction des sources -->
   <div class="methodology-note">
-    <span class="note-icon" aria-hidden="true">ℹ️</span>
+    <span class="note-icon" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="16" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
+    </span>
     <p>
-      <strong>Distinction des données :</strong> Les indicateurs ci-dessous sont consolidés par l'endpoint métier <code>GET /api/dashboard/summary</code> :
+      <strong>Distinction des sources :</strong> Les indicateurs ci-dessous sont consolidés par l'endpoint métier <code>GET /api/dashboard/summary</code> :
       les validations, les recettes encaissées (<code>FareTransactions</code>) et l'état du parc sont agrégés depuis PostgreSQL, tandis que le compteur de conflits d'idempotence (rejets HTTP 409 non persistés) reflète le compteur d'exécution de l'instance API.
     </p>
   </div>
 
   <!-- GRILLE DES INDICATEURS CLÉS (KPIS) -->
-  <section class="kpi-grid" aria-label="Indicateurs clés">
+  <section class="kpi-grid" aria-label="Indicateurs clés d'exploitation">
     <!-- Total Validations -->
     <div class="kpi-card">
       <div class="kpi-head">
         <span class="kpi-title">TENTATIVES DE PASSAGE</span>
-        <span class="kpi-icon blue">📶</span>
       </div>
       <div class="kpi-value">
         @if (isLoading()) { <span class="skeleton">---</span> }
@@ -72,7 +98,6 @@
     <div class="kpi-card border-success">
       <div class="kpi-head">
         <span class="kpi-title">VALIDATIONS ACCEPTÉES</span>
-        <span class="kpi-icon green">✔</span>
       </div>
       <div class="kpi-value text-success">
         @if (isLoading()) { <span class="skeleton">---</span> }
@@ -88,7 +113,6 @@
     <div class="kpi-card border-danger">
       <div class="kpi-head">
         <span class="kpi-title">REFUS DE VALIDATION</span>
-        <span class="kpi-icon red">✖</span>
       </div>
       <div class="kpi-value text-danger">
         @if (isLoading()) { <span class="skeleton">---</span> }
@@ -103,7 +127,6 @@
     <div class="kpi-card border-primary">
       <div class="kpi-head">
         <span class="kpi-title">TOTAL DES DÉBITS ENREGISTRÉS</span>
-        <span class="kpi-icon blue">💰</span>
       </div>
       <div class="kpi-value text-primary">
         @if (isLoading()) { <span class="skeleton">---</span> }
@@ -122,27 +145,42 @@
       <!-- Parc des cartes -->
       <div class="card-panel">
         <div class="card-panel-header">
-          <h3>💳 État du parc de cartes (Base PostgreSQL)</h3>
-          <a routerLink="/cards" class="header-link">Gérer les cartes →</a>
+          <h3>État du parc de cartes (Base PostgreSQL)</h3>
+          <a routerLink="/cards" class="header-link">
+            <span>Gérer les cartes</span>
+            <span class="link-arrow">→</span>
+          </a>
         </div>
         <div class="card-panel-body">
           <div class="cards-status-stats">
             <div class="stat-box">
-              <span class="stat-number text-success">{{ activeCardsCount }}</span>
-              <span class="stat-label">Cartes Actives</span>
+              <span class="stat-indicator dot-success" aria-hidden="true"></span>
+              <div class="stat-content">
+                <span class="stat-number text-success">{{ activeCardsCount }}</span>
+                <span class="stat-label">Cartes Actives</span>
+              </div>
             </div>
             <div class="stat-box">
-              <span class="stat-number text-danger">{{ revokedCardsCount }}</span>
-              <span class="stat-label">Cartes Révoquées</span>
+              <span class="stat-indicator dot-danger" aria-hidden="true"></span>
+              <div class="stat-content">
+                <span class="stat-number text-danger">{{ revokedCardsCount }}</span>
+                <span class="stat-label">Cartes Révoquées</span>
+              </div>
             </div>
             <div class="stat-box">
-              <span class="stat-number text-primary">{{ totalCardsCount }}</span>
-              <span class="stat-label">Total Référencé</span>
+              <span class="stat-indicator dot-neutral" aria-hidden="true"></span>
+              <div class="stat-content">
+                <span class="stat-number text-primary">{{ totalCardsCount }}</span>
+                <span class="stat-label">Total Référencé</span>
+              </div>
             </div>
           </div>
 
           <div class="circulating-balance-bar">
-            <span class="circulating-title">Total des soldes en circulation usagers :</span>
+            <div class="circulating-info">
+              <span class="circulating-title">Total des soldes en circulation usagers</span>
+              <span class="circulating-hint">Engagements créditeurs usagers (distinct des recettes débitées)</span>
+            </div>
             <strong class="circulating-val">{{ totalCirculatingBalanceMillimes | millimes }}</strong>
           </div>
         </div>
@@ -151,7 +189,7 @@
       <!-- Santé système & Infrastructure -->
       <div class="card-panel">
         <div class="card-panel-header">
-          <h3>⚙️ Infrastructure & Observabilité</h3>
+          <h3>Infrastructure &amp; Observabilité</h3>
         </div>
         <div class="card-panel-body">
           <div class="system-rows">
@@ -162,29 +200,29 @@
               </div>
               <div class="system-status">
                 <span class="status-indicator" [class.on]="health()?.status === 'healthy'" [class.error]="health()?.status === 'unreachable'"></span>
-                <span>{{ health()?.status === 'healthy' ? 'Accessible' : (health()?.status === 'unreachable' ? 'Inaccessible' : 'Vérification...') }}</span>
+                <span class="status-label">{{ health()?.status === 'healthy' ? 'Accessible' : (health()?.status === 'unreachable' ? 'Inaccessible' : 'Vérification...') }}</span>
               </div>
             </div>
 
             <div class="system-item">
               <div class="system-name">
                 <strong>Base relationnelle (PostgreSQL 18)</strong>
-                <small>Persistance ACID & Grand livre FareTransactions</small>
+                <small>Persistance ACID &amp; Grand livre FareTransactions</small>
               </div>
               <div class="system-status">
                 <span class="status-indicator" [class.on]="postgresStatus.isOperational" [class.error]="postgresStatus.isError"></span>
-                <span>{{ postgresStatus.label }}</span>
+                <span class="status-label">{{ postgresStatus.label }}</span>
               </div>
             </div>
 
             <div class="system-item">
               <div class="system-name">
                 <strong>Collecteur Prometheus 2.54.1</strong>
-                <small>Endpoint /metrics (Scraping toutes les 2s)</small>
+                <small>Endpoint /metrics (Scraping configuré toutes les 2s)</small>
               </div>
               <div class="system-status">
-                <span class="status-indicator on"></span>
-                <span>Scraping actif</span>
+                <span class="status-indicator configured"></span>
+                <span class="status-label">Configuration active</span>
               </div>
             </div>
 
@@ -195,7 +233,8 @@
               </div>
               <div class="system-status">
                 <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="link-grafana">
-                  Accéder à Grafana ↗
+                  <span>Accéder à Grafana</span>
+                  <span class="ext-arrow">↗</span>
                 </a>
               </div>
             </div>
@@ -203,10 +242,10 @@
             <div class="system-item">
               <div class="system-name">
                 <strong>Conflits d'idempotence détectés</strong>
-                <small>Réutilisations non conformes d'EventId</small>
+                <small>Réutilisations non conformes d'EventId (HTTP 409)</small>
               </div>
               <div class="system-status">
-                <strong>{{ metrics()?.conflictValidations || 0 }} conflit(s)</strong>
+                <strong class="conflict-counter">{{ metrics()?.conflictValidations || 0 }} conflit(s)</strong>
               </div>
             </div>
           </div>
@@ -218,45 +257,70 @@
     <div class="dashboard-col">
       <div class="card-panel">
         <div class="card-panel-header">
-          <h3>⏱️ Dernières validations (Activité en direct)</h3>
-          <a routerLink="/simulator" class="header-link">Simulateur RFID →</a>
+          <h3>Dernières validations (Activité en direct)</h3>
+          <a routerLink="/simulator" class="header-link">
+            <span>Simulateur RFID</span>
+            <span class="link-arrow">→</span>
+          </a>
         </div>
         <div class="card-panel-body">
           @if (validationSession.count() === 0) {
             <div class="empty-feed">
-              <span class="empty-feed-icon">📶</span>
+              <svg class="empty-feed-icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="5" width="20" height="14" rx="2"/>
+                <path d="M7 15a4 4 0 0 1 0-6"/>
+                <path d="M10 13a1.5 1.5 0 0 1 0-2"/>
+              </svg>
               <p>Aucune validation effectuée dans cette session.</p>
               <a routerLink="/simulator" class="btn btn-secondary btn-sm">Ouvrir le valideur RFID</a>
             </div>
           } @else {
-            <div class="feed-list">
+            <div class="feed-list" role="list" aria-label="Historique des validations en direct">
               @for (entry of validationSession.entries().slice(0, 8); track entry.id) {
                 <div class="feed-item" [ngClass]="{
                   'feed-accepted': entry.response?.decision === 'ACCEPTED',
                   'feed-rejected': entry.response?.decision === 'REJECTED',
                   'feed-error': entry.error !== undefined
                 }">
-                  <div class="feed-badge">
-                    @if (entry.response?.decision === 'ACCEPTED') { ✔ }
-                    @else if (entry.response?.decision === 'REJECTED') { ✖ }
-                    @else { ⚠ }
+                  <div class="feed-time-col">
+                    <span class="feed-time">{{ entry.timestamp | date:'HH:mm:ss' }}</span>
+                  </div>
+                  <div class="feed-decision-col">
+                    @if (entry.response?.decision === 'ACCEPTED') {
+                      <span class="decision-tag tag-accepted">
+                        <svg class="tag-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                        Accepté
+                      </span>
+                    } @else if (entry.response?.decision === 'REJECTED') {
+                      <span class="decision-tag tag-rejected">
+                        <svg class="tag-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Refusé
+                      </span>
+                    } @else {
+                      <span class="decision-tag tag-error">Erreur</span>
+                    }
                   </div>
                   <div class="feed-details">
-                    <div class="feed-line-top">
-                      <strong class="feed-uid">{{ entry.request.cardUid }}</strong>
-                      <span class="feed-time">{{ entry.timestamp | date:'HH:mm:ss' }}</span>
-                    </div>
-                    <div class="feed-line-bottom">
-                      @if (entry.response) {
-                        <span class="feed-reason">{{ entry.response.reason }}</span>
-                        @if (entry.response.duplicate) { <span class="duplicate-pill">Rejeu</span> }
-                        @if (entry.response.amountDebited) {
-                          <span class="feed-amount">-{{ entry.response.amountDebited | millimes }}</span>
-                        }
-                      } @else if (entry.error) {
-                        <span class="text-danger">{{ entry.error.message }}</span>
+                    <div class="feed-id-row">
+                      <code class="feed-uid">{{ entry.request.cardUid }}</code>
+                      @if (entry.response?.duplicate) {
+                        <span class="duplicate-pill">Rejeu</span>
                       }
                     </div>
+                    <div class="feed-meta-row">
+                      @if (entry.response) {
+                        <span class="feed-reason">{{ entry.response.reason }}</span>
+                      } @else if (entry.error) {
+                        <span class="feed-reason text-danger">{{ entry.error.message }}</span>
+                      }
+                    </div>
+                  </div>
+                  <div class="feed-amount-col">
+                    @if (entry.response?.amountDebited) {
+                      <span class="feed-amount text-success">-{{ entry.response!.amountDebited | millimes }}</span>
+                    } @else {
+                      <span class="feed-amount feed-amount-muted">0 TND</span>
+                    }
                   </div>
                 </div>
               }

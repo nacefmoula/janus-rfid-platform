@@ -124,4 +124,49 @@ describe('JanusApiService', () => {
     expect(req.request.method).toBe('GET');
     req.flush(mockSummary);
   });
+
+  it('devrait appeler GET /api/cards avec pagination et filtres serveur pour l\'administration', () => {
+    service.getCards(2, 10, '04A1', 'Active').subscribe(res => {
+      expect(res.page).toBe(2);
+      expect(res.pageSize).toBe(10);
+      expect(res.totalCount).toBe(15);
+      expect(res.totalPages).toBe(2);
+      expect(res.items.length).toBe(1);
+      expect(res.items[0].balanceMillimes).toBe(10000);
+    });
+
+    const req = httpMock.expectOne('/api/cards?page=2&pageSize=10&q=04A1&status=Active');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      items: [
+        { uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Carte 1', balanceMillimes: 10000 }
+      ],
+      page: 2,
+      pageSize: 10,
+      totalCount: 15,
+      totalPages: 2
+    });
+  });
+
+  it('devrait appeler GET /api/cards/{uid}/audit avec pagination serveur pour l\'administration', () => {
+    service.getCardAudit('04A1B2C3D4E5F6', 1, 25).subscribe(res => {
+      expect(res.cardUid).toBe('04A1B2C3D4E5F6');
+      expect(res.totalCount).toBe(1);
+      expect(res.auditLogs.length).toBe(0);
+    });
+
+    const req = httpMock.expectOne('/api/cards/04A1B2C3D4E5F6/audit?page=1&pageSize=25');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      cardUid: '04A1B2C3D4E5F6',
+      totalCount: 1,
+      limit: 25,
+      offset: 0,
+      auditLogs: [],
+      items: [],
+      page: 1,
+      pageSize: 25,
+      totalPages: 1
+    });
+  });
 });

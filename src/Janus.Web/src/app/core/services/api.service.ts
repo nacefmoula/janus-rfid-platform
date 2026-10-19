@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpContext, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { ApiHealth, PrometheusMetricsSummary } from '../models/health.model';
-import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse } from '../models/card.model';
+import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse, PagedResult } from '../models/card.model';
 import { ValidationRequest, ValidationResult } from '../models/validation.model';
 import { SKIP_AUTH_CONTEXT, SKIP_AUTH_HEADER } from '../interceptors/auth.interceptor';
 import { SKIP_ERROR_TOAST_CONTEXT, SKIP_GLOBAL_ERROR_TOAST_HEADER } from '../interceptors/error.interceptor';
@@ -26,6 +26,25 @@ export class JanusApiService {
    */
   getHealth(): Observable<ApiHealth> {
     return this.http.get<ApiHealth>(`${this.basePath}/health`);
+  }
+
+  /**
+   * Récupère l'inventaire paginé des cartes pour l'administration (avec solde financier et filtres serveur).
+   * Requiert STRICTEMENT les droits Admin : GET /api/cards?page={page}&pageSize={pageSize}&q={q}&status={status}
+   */
+  getCards(page = 1, pageSize = 25, q?: string, status?: string): Observable<PagedResult<TransitCard>> {
+    let params = new HttpParams()
+      .set('page', page.toString())
+      .set('pageSize', pageSize.toString());
+
+    if (q && q.trim()) {
+      params = params.set('q', q.trim());
+    }
+    if (status && status !== 'ALL') {
+      params = params.set('status', status.trim());
+    }
+
+    return this.http.get<PagedResult<TransitCard>>(`${this.basePath}/api/cards`, { params });
   }
 
   /**
@@ -68,14 +87,14 @@ export class JanusApiService {
   }
 
   /**
-   * Consulte les journaux d'audit administratif d'une carte.
+   * Consulte les journaux d'audit administratif d'une carte avec pagination serveur.
    * Requiert STRICTEMENT les droits Admin (HTTP 403 si token terminal).
-   * GET /api/cards/{uid}/audit?limit={limit}&offset={offset}
+   * GET /api/cards/{uid}/audit?page={page}&pageSize={pageSize}
    */
-  getCardAudit(uid: string, limit = 50, offset = 0): Observable<CardAuditResponse> {
+  getCardAudit(uid: string, page = 1, pageSize = 25): Observable<CardAuditResponse> {
     const params = new HttpParams()
-      .set('limit', limit.toString())
-      .set('offset', offset.toString());
+      .set('page', page.toString())
+      .set('pageSize', pageSize.toString());
 
     return this.http.get<CardAuditResponse>(`${this.basePath}/api/cards/${encodeURIComponent(uid.trim())}/audit`, { params });
   }

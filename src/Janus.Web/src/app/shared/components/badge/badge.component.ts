@@ -15,62 +15,64 @@ import { CommonModule } from '@angular/common';
     .badge {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 3px 10px;
-      border-radius: 9999px;
-      font-size: 0.75rem;
+      gap: 5px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 0.6875rem;
       font-weight: 600;
       letter-spacing: 0.02em;
-      line-height: 1.3;
+      line-height: 1.35;
       white-space: nowrap;
+      border: 1px solid transparent;
+      text-transform: uppercase;
     }
 
     .badge-dot {
-      width: 6px;
-      height: 6px;
+      width: 5px;
+      height: 5px;
       border-radius: 50%;
       flex-shrink: 0;
     }
 
     /* Succès / Active / Accepté (WCAG AAA) */
     .badge-success {
-      background-color: #E3FCEF;
-      color: #006644;
-      border: 1px solid #ABF5D1;
+      background-color: var(--color-success-bg);
+      color: var(--color-success-text);
+      border-color: var(--color-success-border);
     }
-    .badge-success .badge-dot { background-color: #00875A; }
+    .badge-success .badge-dot { background-color: var(--color-success); }
 
     /* Danger / Révoqué / Refusé (WCAG AAA) */
     .badge-danger {
-      background-color: #FFEBE6;
-      color: #BF2600;
-      border: 1px solid #FFBDAD;
+      background-color: var(--color-danger-bg);
+      color: var(--color-danger-text);
+      border-color: var(--color-danger-border);
     }
-    .badge-danger .badge-dot { background-color: #DE350B; }
+    .badge-danger .badge-dot { background-color: var(--color-danger); }
 
     /* Avertissement / Rejeu / Suspendu (WCAG AA) */
     .badge-warning {
-      background-color: #FFFAE6;
-      color: #8F5500;
-      border: 1px solid #FFE380;
+      background-color: var(--color-warning-bg);
+      color: var(--color-warning-text);
+      border-color: var(--color-warning-border);
     }
-    .badge-warning .badge-dot { background-color: #FF8B00; }
+    .badge-warning .badge-dot { background-color: var(--color-warning); }
 
     /* Conflit 409 / Audit (WCAG AA) */
     .badge-purple {
-      background-color: #EAE6FF;
-      color: #403294;
-      border: 1px solid #C0B6F2;
+      background-color: var(--color-purple-bg);
+      color: var(--color-purple-text);
+      border-color: var(--color-purple-border);
     }
-    .badge-purple .badge-dot { background-color: #5243AA; }
+    .badge-purple .badge-dot { background-color: var(--color-purple); }
 
     /* Info / Neutre */
     .badge-neutral {
-      background-color: #F1F5F9;
-      color: #334155;
-      border: 1px solid #CBD5E1;
+      background-color: var(--bg-surface-subtle);
+      color: var(--color-text-muted);
+      border-color: var(--border-light);
     }
-    .badge-neutral .badge-dot { background-color: #64748B; }
+    .badge-neutral .badge-dot { background-color: var(--color-text-dim); }
   `]
 })
 export class BadgeComponent {

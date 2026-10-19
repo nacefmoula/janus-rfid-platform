@@ -46,6 +46,33 @@ public sealed class CardAuditLog {
 }
 public sealed record ValidationRequest(Guid EventId, string CardUid, DateTimeOffset? OccurredAt, string EventType);
 public sealed record CardUpsertRequest(int BalanceMillimes, string? Status, string? Label, string? Reason = null);
+
+public sealed record PagedResult<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages
+);
+
+public sealed record AdminTransitCardDto(
+    string Uid,
+    string Status,
+    string Label,
+    int BalanceMillimes
+);
+
+public sealed record CardAuditLogDto(
+    long Id,
+    string Action,
+    int? PreviousBalanceMillimes,
+    int NewBalanceMillimes,
+    string? PreviousStatus,
+    string NewStatus,
+    string? Reason,
+    string Actor,
+    DateTimeOffset CreatedAt
+);
 public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbContext(options) {
     public DbSet<TransitCard> Cards => Set<TransitCard>();
     public DbSet<ValidationEvent> Validations => Set<ValidationEvent>();

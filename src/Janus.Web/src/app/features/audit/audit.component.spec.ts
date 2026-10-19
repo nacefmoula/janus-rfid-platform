@@ -95,7 +95,7 @@ describe('AuditComponent', () => {
     fixture.detectChanges();
 
     expect(apiSpy.getDemoCards).toHaveBeenCalledTimes(1);
-    expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6');
+    expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 1, 25);
     expect(component.auditData()).toEqual(mockAuditResponse);
 
     const barrier = fixture.nativeElement.querySelector('.rbac-barrier-panel');
@@ -140,10 +140,94 @@ describe('AuditComponent', () => {
     expect(component.auditData()).toBeNull();
     expect(component.demoCards()).toEqual([]);
     expect(component.isLoading()).toBeFalse();
+    expect(component.currentPage()).toBe(1);
+    expect(component.totalAuditCount()).toBe(0);
     expect(fixture.nativeElement.querySelector('.rbac-barrier-panel')).toBeTruthy();
 
     // L'ancienne requête d'audit termine après la déconnexion : elle ne doit pas réafficher les données
     delayedAudit$.next(mockAuditResponse);
     expect(component.auditData()).toBeNull();
+  });
+
+  describe('Pagination serveur du journal d\'audit', () => {
+    const multiPageAuditResponse: CardAuditResponse = {
+      cardUid: '04A1B2C3D4E5F6',
+      totalCount: 30,
+      limit: 10,
+      offset: 0,
+      page: 1,
+      pageSize: 10,
+      totalPages: 3,
+      items: Array.from({ length: 10 }, (_, i) => ({
+        id: i + 1,
+        action: 'ADMIN_CARD_UPDATED',
+        previousBalanceMillimes: 10000,
+        newBalanceMillimes: 15000,
+        previousStatus: 'Active',
+        newStatus: 'Active',
+        reason: `Recharge ${i + 1}`,
+        actor: 'ADMIN',
+        createdAt: '2026-10-16T10:00:00Z'
+      })),
+      auditLogs: []
+    };
+
+    beforeEach(() => {
+      component.session.setAdminToken('valid-admin-token');
+      apiSpy.getCardAudit.and.returnValue(of(multiPageAuditResponse));
+      component.selectedUid.set('04A1B2C3D4E5F6');
+      component.pageSize.set(10);
+      component.fetchAuditLogs();
+      fixture.detectChanges();
+    });
+
+    it('calcule correctement les bornes et pages de l\'audit', () => {
+      expect(component.totalAuditCount()).toBe(30);
+      expect(component.totalPages()).toBe(3);
+      expect(component.startIndex).toBe(1);
+      expect(component.endIndex).toBe(10);
+    });
+
+    it('navigue entre les pages et déclenche une requête paginée avec les paramètres corrects', () => {
+      apiSpy.getCardAudit.calls.reset();
+
+      component.goToNextPage();
+      expect(component.currentPage()).toBe(2);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 2, 10);
+
+      component.goToLastPage();
+      expect(component.currentPage()).toBe(3);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 3, 10);
+
+      component.goToPreviousPage();
+      expect(component.currentPage()).toBe(2);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 2, 10);
+
+      component.goToFirstPage();
+      expect(component.currentPage()).toBe(1);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 1, 10);
+    });
+
+    it('modifie la taille de page et réinitialise à la première page', () => {
+      apiSpy.getCardAudit.calls.reset();
+
+      component.currentPage.set(2);
+      component.onPageSizeChange(25);
+
+      expect(component.pageSize()).toBe(25);
+      expect(component.currentPage()).toBe(1);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04A1B2C3D4E5F6', 1, 25);
+    });
+
+    it('réinitialise la page à 1 lors du changement de carte sélectionnée', () => {
+      apiSpy.getCardAudit.calls.reset();
+
+      component.currentPage.set(3);
+      component.onCardSelected('04DEAD00000001');
+
+      expect(component.selectedUid()).toBe('04DEAD00000001');
+      expect(component.currentPage()).toBe(1);
+      expect(apiSpy.getCardAudit).toHaveBeenCalledWith('04DEAD00000001', 1, 10);
+    });
   });
 });
