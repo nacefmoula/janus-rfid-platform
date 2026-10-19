@@ -27,6 +27,12 @@ export class AuditComponent implements OnInit, OnDestroy {
   readonly isLoading = signal(false);
   readonly rbacError = signal<{ status: number; message: string } | null>(null);
 
+  // Pagination serveur de l'audit (10, 25, 50)
+  readonly pageSize = signal<number>(25);
+  readonly currentPage = signal<number>(1);
+  readonly totalAuditCount = signal<number>(0);
+  readonly totalPages = signal<number>(1);
+
   private sessionSub?: Subscription;
   private cardsSub?: Subscription;
   private auditSub?: Subscription;
@@ -55,6 +61,10 @@ export class AuditComponent implements OnInit, OnDestroy {
     this.rbacError.set(null);
     this.demoCards.set([]);
     this.selectedUid.set('');
+    this.totalAuditCount.set(0);
+    this.totalPages.set(1);
+    this.currentPage.set(1);
+    this.pageSize.set(25);
     this.isLoading.set(false);
 
     if (role === 'ADMIN') {
@@ -75,6 +85,7 @@ export class AuditComponent implements OnInit, OnDestroy {
         this.demoCards.set(cards);
         if (cards.length > 0 && !this.selectedUid()) {
           this.selectedUid.set(cards[0].uid);
+          this.currentPage.set(1);
           this.fetchAuditLogs();
         }
       },
@@ -84,6 +95,7 @@ export class AuditComponent implements OnInit, OnDestroy {
 
   onCardSelected(uid: string): void {
     this.selectedUid.set(uid);
+    this.currentPage.set(1);
     this.fetchAuditLogs();
   }
 
@@ -101,15 +113,19 @@ export class AuditComponent implements OnInit, OnDestroy {
     this.rbacError.set(null);
     this.auditData.set(null);
 
-    this.auditSub = this.api.getCardAudit(uid).subscribe({
+    this.auditSub = this.api.getCardAudit(uid, this.currentPage(), this.pageSize()).subscribe({
       next: (res) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.auditData.set(res);
+        this.totalAuditCount.set(res.totalCount);
+        this.totalPages.set(res.totalPages || Math.max(1, Math.ceil(res.totalCount / this.pageSize())));
         this.isLoading.set(false);
       },
       error: (err) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.isLoading.set(false);
+        this.totalAuditCount.set(0);
+        this.totalPages.set(1);
         const status = err.status || 0;
         let message = 'Erreur lors de la récupération du journal d\'audit.';
 
@@ -126,5 +142,50 @@ export class AuditComponent implements OnInit, OnDestroy {
         this.rbacError.set({ status, message });
       }
     });
+  }
+
+  get startIndex(): number {
+    return this.totalAuditCount() === 0 ? 0 : (this.currentPage() - 1) * this.pageSize() + 1;
+  }
+
+  get endIndex(): number {
+    return Math.min(this.currentPage() * this.pageSize(), this.totalAuditCount());
+  }
+
+  onPageSizeChange(newSize: number | string): void {
+    const parsed = Number(newSize);
+    if (parsed === 10 || parsed === 25 || parsed === 50) {
+      this.pageSize.set(parsed);
+      this.currentPage.set(1);
+      this.fetchAuditLogs();
+    }
+  }
+
+  goToFirstPage(): void {
+    if (this.currentPage() > 1) {
+      this.currentPage.set(1);
+      this.fetchAuditLogs();
+    }
+  }
+
+  goToPreviousPage(): void {
+    if (this.currentPage() > 1) {
+      this.currentPage.update(p => p - 1);
+      this.fetchAuditLogs();
+    }
+  }
+
+  goToNextPage(): void {
+    if (this.currentPage() < this.totalPages()) {
+      this.currentPage.update(p => p + 1);
+      this.fetchAuditLogs();
+    }
+  }
+
+  goToLastPage(): void {
+    if (this.currentPage() < this.totalPages()) {
+      this.currentPage.set(this.totalPages());
+      this.fetchAuditLogs();
+    }
   }
 }

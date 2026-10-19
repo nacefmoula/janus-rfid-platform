@@ -146,6 +146,58 @@
               </tbody>
             </table>
           </div>
+
+          <!-- BARRE DE PAGINATION AUDIT -->
+          <div class="table-pagination">
+            <div class="pagination-info">
+              Affichage <strong>{{ startIndex }}–{{ endIndex }}</strong> sur <strong>{{ totalAuditCount() }}</strong> événement(s)
+            </div>
+            <div class="pagination-nav" role="navigation" aria-label="Pagination du journal d'audit">
+              <div class="page-size-selector">
+                <label for="auditPageSizeSelect" class="page-size-label">Afficher :</label>
+                <select
+                  id="auditPageSizeSelect"
+                  class="page-size-select"
+                  [ngModel]="pageSize()"
+                  (ngModelChange)="onPageSizeChange($event)">
+                  <option [value]="10">10</option>
+                  <option [value]="25">25</option>
+                  <option [value]="50">50</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                class="pagination-btn"
+                (click)="goToFirstPage()"
+                [disabled]="currentPage() <= 1"
+                aria-label="Première page"
+                title="Première page">«</button>
+              <button
+                type="button"
+                class="pagination-btn"
+                (click)="goToPreviousPage()"
+                [disabled]="currentPage() <= 1"
+                aria-label="Page précédente"
+                title="Page précédente">‹</button>
+              <span class="page-indicator" aria-current="page">
+                Page <strong>{{ currentPage() }}</strong> sur <strong>{{ totalPages() }}</strong>
+              </span>
+              <button
+                type="button"
+                class="pagination-btn"
+                (click)="goToNextPage()"
+                [disabled]="currentPage() >= totalPages()"
+                aria-label="Page suivante"
+                title="Page suivante">›</button>
+              <button
+                type="button"
+                class="pagination-btn"
+                (click)="goToLastPage()"
+                [disabled]="currentPage() >= totalPages()"
+                aria-label="Dernière page"
+                title="Dernière page">»</button>
+            </div>
+          </div>
         }
       </div>
     </div>

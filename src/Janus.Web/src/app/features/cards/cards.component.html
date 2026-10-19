@@ -1,9 +1,12 @@
 <div class="cards-view">
-  <!-- Barre d'outils et de recherche -->
+  <!-- Barre d'outils, filtres et pagination de tête -->
   <div class="card-panel search-toolbar">
     <div class="search-inputs">
       <div class="input-with-icon">
-        <span class="search-glyph" aria-hidden="true">🔍</span>
+        <svg class="search-glyph" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
         <label for="cardSearchInput" class="sr-only">Rechercher une carte</label>
         <input
           id="cardSearchInput"
@@ -11,7 +14,7 @@
           class="form-input search-field"
           placeholder="Rechercher par UID (ex: 04A1B2...) ou libellé usager..."
           [ngModel]="searchFilter()"
-          (ngModelChange)="searchFilter.set($event)"
+          (ngModelChange)="onSearchInput($event)"
         />
       </div>
 
@@ -21,18 +24,34 @@
           id="statusFilterSelect"
           class="form-select"
           [ngModel]="statusFilter()"
-          (ngModelChange)="statusFilter.set($event)">
+          (ngModelChange)="onStatusFilterChange($event)">
           <option value="ALL">Tous les statuts</option>
           <option value="Active">Actives uniquement</option>
           <option value="Revoked">Révoquées uniquement</option>
         </select>
       </div>
+
+      <div class="page-size-selector">
+        <label for="pageSizeSelect" class="page-size-label">Afficher :</label>
+        <select
+          id="pageSizeSelect"
+          class="form-select form-select-sm"
+          [ngModel]="pageSize()"
+          (ngModelChange)="onPageSizeChange($event)">
+          <option [value]="10">10</option>
+          <option [value]="25">25</option>
+          <option [value]="50">50</option>
+        </select>
+      </div>
     </div>
 
     <div class="toolbar-side-actions">
-      <span class="results-count">{{ filteredCards.length }} carte(s) trouvée(s)</span>
+      <span class="results-count">{{ totalFilteredCards }} carte(s) trouvée(s)</span>
       <button type="button" class="btn btn-secondary" (click)="loadCards()" [disabled]="isLoading()">
-        🔄 Actualiser
+        <svg class="btn-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+        </svg>
+        <span>Actualiser</span>
       </button>
     </div>
   </div>
@@ -49,10 +68,23 @@
           <div class="loading-spinner"></div>
           <p>Chargement des cartes depuis l'API...</p>
         </div>
-      } @else if (filteredCards.length === 0) {
+      } @else if (totalFilteredCards === 0 && !hasActiveFilters) {
         <div class="empty-state">
-          <span class="empty-glyph" aria-hidden="true">💳</span>
+          <svg class="empty-icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="5" width="20" height="14" rx="2"/>
+            <line x1="2" y1="10" x2="22" y2="10"/>
+          </svg>
+          <p>Aucune carte enregistrée dans le système.</p>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="loadCards()">Actualiser l'inventaire</button>
+        </div>
+      } @else if (totalFilteredCards === 0 && hasActiveFilters) {
+        <div class="empty-state">
+          <svg class="empty-icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
           <p>Aucune carte ne correspond aux critères de recherche.</p>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="resetFilters()">Réinitialiser les filtres</button>
         </div>
       } @else {
         <div class="table-container">
@@ -67,7 +99,7 @@
               </tr>
             </thead>
             <tbody>
-              @for (card of filteredCards; track card.uid) {
+              @for (card of paginatedCards; track card.uid) {
                 <tr>
                   <td>
                     <code class="uid-tag">{{ card.uid }}</code>
@@ -88,15 +120,18 @@
                   <td class="text-right">
                     <div class="row-actions">
                       <button type="button" class="btn btn-secondary btn-sm" (click)="openCardDetail(card)">
-                        📜 Historique débits
+                        <span>Historique débits</span>
                       </button>
                       @if (session.activeRole() === 'ADMIN') {
-                        <button type="button" class="btn btn-primary btn-sm" (click)="openEditModal(card)">
-                          ⚙️ Gérer / Recharger
+                        <button
+                          type="button"
+                          class="btn btn-primary btn-sm"
+                          (click)="openEditModal(card, $any($event.currentTarget))">
+                          <span>Gérer / Recharger</span>
                         </button>
                       } @else {
                         <button type="button" class="btn btn-secondary btn-sm btn-disabled-role" disabled title="Rôle Administrateur requis pour modifier ou recharger une carte">
-                          🔒 Gérer (Admin requis)
+                          <span>Gérer (Admin requis)</span>
                         </button>
                       }
                     </div>
@@ -106,20 +141,65 @@
             </tbody>
           </table>
         </div>
+
+        <!-- BARRE DE PAGINATION INVENTAIRE -->
+        <div class="table-pagination">
+          <div class="pagination-info">
+            Affichage <strong>{{ startIndex }}–{{ endIndex }}</strong> sur <strong>{{ totalFilteredCards }}</strong> carte(s)
+          </div>
+          <div class="pagination-nav" role="navigation" aria-label="Pagination de l'inventaire des cartes">
+            <button
+              type="button"
+              class="pagination-btn"
+              (click)="goToFirstPage()"
+              [disabled]="currentPage() <= 1"
+              aria-label="Première page"
+              title="Première page">«</button>
+            <button
+              type="button"
+              class="pagination-btn"
+              (click)="goToPreviousPage()"
+              [disabled]="currentPage() <= 1"
+              aria-label="Page précédente"
+              title="Page précédente">‹</button>
+            <span class="page-indicator" aria-current="page">
+              Page <strong>{{ currentPage() }}</strong> sur <strong>{{ totalPages }}</strong>
+            </span>
+            <button
+              type="button"
+              class="pagination-btn"
+              (click)="goToNextPage()"
+              [disabled]="currentPage() >= totalPages"
+              aria-label="Page suivante"
+              title="Page suivante">›</button>
+            <button
+              type="button"
+              class="pagination-btn"
+              (click)="goToLastPage()"
+              [disabled]="currentPage() >= totalPages"
+              aria-label="Dernière page"
+              title="Dernière page">»</button>
+          </div>
+        </div>
       }
     </div>
   </div>
 
-  <!-- FICHE DÉTAILLÉE DE CARTE (PANNEAU LATÉRAL / MODALE) -->
+  <!-- FICHE DÉTAILLÉE DE CARTE (PANNEAU MODAL ACCESSIBLE) -->
   @if (selectedCardDetail()) {
     <div class="modal-backdrop" (click)="closeCardDetail()">
-      <div class="modal-dialog modal-lg" (click)="$event.stopPropagation()">
+      <div
+        class="modal-dialog modal-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cardDetailTitle"
+        (click)="$event.stopPropagation()">
         <div class="modal-header">
           <div>
-            <h3>Fiche détaillée du support RFID</h3>
+            <h3 id="cardDetailTitle">Fiche détaillée du support RFID</h3>
             <span class="modal-sub">UID : <code>{{ selectedCardDetail()!.uid }}</code></span>
           </div>
-          <button type="button" class="close-btn" (click)="closeCardDetail()" aria-label="Fermer">✕</button>
+          <button type="button" class="close-btn" (click)="closeCardDetail()" aria-label="Fermer la fiche détaillée">✕</button>
         </div>
 
         <div class="modal-body">
@@ -187,7 +267,7 @@
             </button>
           } @else {
             <button type="button" class="btn btn-secondary btn-disabled-role" disabled title="Rôle Administrateur requis pour modifier ou recharger une carte">
-              🔒 Modifier / Recharger (Admin requis)
+              Modifier / Recharger (Admin requis)
             </button>
           }
         </div>
@@ -197,24 +277,67 @@
 
   <!-- MODALE D'ADMINISTRATION (RECHARGE / CHANGEMENT DE STATUT) -->
   @if (showEditModal()) {
-    <div class="modal-backdrop" (click)="closeEditModal()">
-      <div class="modal-dialog" (click)="$event.stopPropagation()">
+    <div class="modal-backdrop" (click)="onBackdropClick($event)">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="editModalTitle"
+        (click)="$event.stopPropagation()">
         <div class="modal-header">
           <div>
-            <h3>Administration de carte (Mise à jour / Recharge)</h3>
-            <span class="modal-sub">Cible : <code>{{ targetCardUid }}</code></span>
+            <h3 id="editModalTitle">Administration de carte (Mise à jour / Recharge)</h3>
+            <span class="modal-sub">UID cible : <code>{{ targetCardUid }}</code></span>
           </div>
-          <button type="button" class="close-btn" (click)="closeEditModal()" aria-label="Fermer">✕</button>
+          <button
+            type="button"
+            class="close-btn"
+            (click)="closeEditModal()"
+            [disabled]="isSubmitting()"
+            aria-label="Fermer la boîte de dialogue">✕</button>
         </div>
 
         <div class="modal-body">
-          <div class="admin-notice">
-            <span class="admin-icon" aria-hidden="true">🛡️</span>
-            <div>
-              <strong>Règle de gouvernance & Traçabilité :</strong>
-              <span> Cette action exécute <code>PUT /api/cards/&#123;uid&#125;</code> (rôle Administrateur requis). Elle effectue un ajustement administratif de solde consigné dans le journal d'audit (<code>CardAuditLog</code>), distinct du registre billettique de transport (<code>FareTransactions</code>).</span>
+          <!-- Encart d'état de la carte sélectionnée -->
+          <div class="card-summary-card">
+            <div class="card-summary-item">
+              <span class="card-summary-label">UID Support</span>
+              <code class="card-summary-val uid-tag">{{ targetCardUid }}</code>
+            </div>
+            <div class="card-summary-item">
+              <span class="card-summary-label">Solde actuel</span>
+              <span class="card-summary-val text-primary">{{ (selectedCardForEdit()?.balanceMillimes ?? 0) | millimes }}</span>
+            </div>
+            <div class="card-summary-item">
+              <span class="card-summary-label">Statut actuel</span>
+              <div class="mt-1">
+                <app-badge [value]="selectedCardForEdit()?.status || editStatus"></app-badge>
+              </div>
             </div>
           </div>
+
+          <!-- Règle de gouvernance & traçabilité -->
+          <div class="admin-notice">
+            <svg class="admin-notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <div>
+              <strong>Règle de gouvernance &amp; Traçabilité :</strong>
+              <span> Cette action consigne un ajustement administratif de solde dans le journal d'audit (<code>CardAuditLogs</code>), distinct du registre billettique de transport (<code>FareTransactions</code>).</span>
+            </div>
+          </div>
+
+          <!-- Alerte d'erreur interne à la modale -->
+          @if (modalErrorMessage()) {
+            <div class="modal-error-box" role="alert">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span>{{ modalErrorMessage() }}</span>
+            </div>
+          }
 
           <div class="form-group">
             <label class="form-label" for="cardLabelInput">Libellé de la carte / Usager</label>
@@ -224,6 +347,7 @@
               class="form-input"
               [(ngModel)]="editLabel"
               maxlength="120"
+              placeholder="Ex: Abonné Mensuel - Ligne 1"
             />
           </div>
 
@@ -243,9 +367,9 @@
             <!-- Raccourcis de recharge rapide -->
             <div class="quick-recharge-btns">
               <span class="quick-title">Recharge rapide :</span>
-              <button type="button" class="quick-btn" (click)="addAmountMillimes(5000)">+ 5,000 TND</button>
-              <button type="button" class="quick-btn" (click)="addAmountMillimes(10000)">+ 10,000 TND</button>
-              <button type="button" class="quick-btn" (click)="addAmountMillimes(20000)">+ 20,000 TND</button>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(5000)" [disabled]="isSubmitting()">+ 5,000 TND</button>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(10000)" [disabled]="isSubmitting()">+ 10,000 TND</button>
+              <button type="button" class="quick-btn" (click)="addAmountMillimes(20000)" [disabled]="isSubmitting()">+ 20,000 TND</button>
             </div>
           </div>
 
@@ -278,9 +402,16 @@
           <button type="button" class="btn btn-secondary" (click)="closeEditModal()" [disabled]="isSubmitting()">
             Annuler
           </button>
-          <button type="button" class="btn btn-primary" (click)="submitCardUpdate()" [disabled]="isSubmitting() || !editReason.trim()">
-            @if (isSubmitting()) { Enregistrement... }
-            @else { Valider et inscrire à l'audit }
+          <button
+            type="button"
+            class="btn btn-primary"
+            (click)="submitCardUpdate()"
+            [disabled]="isSubmitting() || !editReason.trim() || editBalanceMillimes < 0">
+            @if (isSubmitting()) {
+              <span>Enregistrement...</span>
+            } @else {
+              <span>Valider et inscrire à l'audit</span>
+            }
           </button>
         </div>
       </div>

@@ -288,6 +288,62 @@ await using (var scope = app.Services.CreateAsyncScope()) {
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "janus-api" }))
     .AllowAnonymous();
 
+// PAG-01: Endpoint administratif paginé pour l'inventaire des cartes (avec filtres recherche et statut, tri déterministe)
+app.MapGet("/api/cards", async (HttpRequest http, JanusDbContext db) => {
+    int page = 1;
+    if (http.Query.TryGetValue("page", out var pageStr) && int.TryParse(pageStr, out var parsedPage))
+        page = Math.Max(1, parsedPage);
+
+    int pageSize = 25;
+    if (http.Query.TryGetValue("pageSize", out var sizeStr) && int.TryParse(sizeStr, out var parsedSize))
+        pageSize = Math.Clamp(parsedSize, 1, 100);
+
+    var query = db.Cards.AsNoTracking();
+
+    if (http.Query.TryGetValue("status", out var statusStr) && !string.IsNullOrWhiteSpace(statusStr)) {
+        var statusVal = statusStr.ToString().Trim();
+        if (!statusVal.Equals("ALL", StringComparison.OrdinalIgnoreCase)) {
+            if (Enum.TryParse<CardStatus>(statusVal, true, out var parsedStatus)) {
+                query = query.Where(c => c.Status == parsedStatus);
+            } else {
+                return Results.BadRequest(new { error = "invalid_status", message = "Invalid status filter. Allowed values: Active, Revoked, ALL." });
+            }
+        }
+    }
+
+    if (http.Query.TryGetValue("q", out var qStr) && !string.IsNullOrWhiteSpace(qStr)) {
+        var q = qStr.ToString().Trim().ToUpperInvariant();
+        query = query.Where(c => c.Uid.ToUpper().Contains(q) || c.Label.ToUpper().Contains(q));
+    }
+
+    var totalCount = await query.CountAsync();
+    var totalPages = totalCount == 0 ? 1 : (int)Math.Ceiling((double)totalCount / pageSize);
+
+    var offset = checked((int)Math.Min((long)(page - 1) * pageSize, int.MaxValue));
+
+    var items = await query
+        .OrderBy(c => c.Uid)
+        .Skip(offset)
+        .Take(pageSize)
+        .Select(c => new AdminTransitCardDto(
+            c.Uid,
+            c.Status.ToString(),
+            c.Label,
+            c.BalanceMillimes
+        ))
+        .ToListAsync();
+
+    return Results.Ok(new PagedResult<AdminTransitCardDto>(
+        items,
+        page,
+        pageSize,
+        totalCount,
+        totalPages
+    ));
+})
+    .RequireAuthorization("AdminOnly")
+    .RequireRateLimiting("AdminPolicy");
+
 app.MapGet("/api/demo/cards", async (HttpRequest http, JanusDbContext db) => {
     int limit = 50;
     if (http.Query.TryGetValue("limit", out var limitStr) && int.TryParse(limitStr, out var parsedLimit))
@@ -413,15 +469,49 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusD
     var card = await db.Cards.AsNoTracking().SingleOrDefaultAsync(c => c.Uid == normalized);
     if (card is null) return Results.NotFound(new { error = "card_not_found" });
 
+    // PAG-02: Gestion duale des paramètres modernes (page/pageSize) et historiques (limit/offset)
+    // Règle de priorité : les paramètres modernes prévalent s'ils sont explicitement fournis.
+    int page = 1;
+    int pageSize = 25;
     int limit = 50;
-    if (http.Query.TryGetValue("limit", out var limitStr) && int.TryParse(limitStr, out var parsedLimit))
-        limit = Math.Clamp(parsedLimit, 1, 100);
-
     int offset = 0;
-    if (http.Query.TryGetValue("offset", out var offsetStr) && int.TryParse(offsetStr, out var parsedOffset))
-        offset = Math.Max(0, parsedOffset);
+
+    bool hasModernParams = http.Query.ContainsKey("page") || http.Query.ContainsKey("pageSize");
+    bool hasLegacyParams = http.Query.ContainsKey("limit") || http.Query.ContainsKey("offset");
+
+    if (hasModernParams)
+    {
+        if (http.Query.TryGetValue("page", out var pageStr) && int.TryParse(pageStr, out var parsedPage))
+            page = Math.Max(1, parsedPage);
+
+        if (http.Query.TryGetValue("pageSize", out var sizeStr) && int.TryParse(sizeStr, out var parsedSize))
+            pageSize = Math.Clamp(parsedSize, 1, 100);
+
+        offset = checked((int)Math.Min((long)(page - 1) * pageSize, int.MaxValue));
+        limit = pageSize;
+    }
+    else if (hasLegacyParams)
+    {
+        if (http.Query.TryGetValue("limit", out var limitStr) && int.TryParse(limitStr, out var parsedLimit))
+            limit = Math.Clamp(parsedLimit, 1, 100);
+
+        if (http.Query.TryGetValue("offset", out var offsetStr) && int.TryParse(offsetStr, out var parsedOffset))
+            offset = Math.Max(0, parsedOffset);
+
+        pageSize = limit;
+        page = (offset / limit) + 1;
+    }
+    else
+    {
+        // Défaut historique : limit = 50, offset = 0
+        limit = 50;
+        offset = 0;
+        pageSize = limit;
+        page = 1;
+    }
 
     var totalAudits = await db.CardAuditLogs.AsNoTracking().CountAsync(a => a.CardUid == normalized);
+    var totalPages = totalAudits == 0 ? 1 : (int)Math.Ceiling((double)totalAudits / pageSize);
 
     var audits = await db.CardAuditLogs.AsNoTracking()
         .Where(a => a.CardUid == normalized)
@@ -429,7 +519,7 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusD
         .ThenByDescending(a => a.Id)
         .Skip(offset)
         .Take(limit)
-        .Select(a => new {
+        .Select(a => new CardAuditLogDto(
             a.Id,
             a.Action,
             a.PreviousBalanceMillimes,
@@ -439,12 +529,16 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusD
             a.Reason,
             a.Actor,
             a.CreatedAt
-        })
+        ))
         .ToListAsync();
 
     return Results.Ok(new {
-        cardUid = normalized,
+        items = audits,
+        page,
+        pageSize,
         totalCount = totalAudits,
+        totalPages,
+        cardUid = normalized,
         limit,
         offset,
         auditLogs = audits

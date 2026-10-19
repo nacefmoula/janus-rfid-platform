@@ -1,10 +1,18 @@
-<div class="app-shell">
+<div class="app-shell" [class.sidebar-open]="sidebarOpen()">
+  <!-- Voile d'arrière-plan sur mobile -->
+  <div
+    class="sidebar-backdrop"
+    [class.visible]="sidebarOpen()"
+    (click)="closeSidebar()"
+    aria-hidden="true">
+  </div>
+
   <!-- Barre latérale de navigation -->
-  <app-sidebar></app-sidebar>
+  <app-sidebar [isOpen]="sidebarOpen()" (closeSidebar)="closeSidebar()"></app-sidebar>
 
   <!-- Zone principale -->
   <div class="app-main">
-    <app-header></app-header>
+    <app-header (toggleSidebar)="toggleSidebar()"></app-header>
 
     <main class="page-content" id="main-content">
       <router-outlet></router-outlet>
@@ -12,9 +20,11 @@
 
     <footer class="app-footer">
       <div class="footer-meta">
-        <span>Janus RFID Platform — Projet de Fin d'Études (PFE)</span>
+        <span class="footer-title">Janus RFID Platform</span>
         <span class="sep">•</span>
-        <span>Auteur : Nacef Moula (<code>nacef.moula&#64;esprit.tn</code>)</span>
+        <span>Système de Billettique Virtuelle & Sécurisée</span>
+        <span class="sep">•</span>
+        <span class="footer-author">Nacef Moula (ESPRIT)</span>
       </div>
       <div class="footer-badges">
         <span class="tech-pill">ASP.NET Core 10</span>

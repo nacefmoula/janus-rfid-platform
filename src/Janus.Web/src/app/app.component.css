@@ -2,6 +2,11 @@
   display: flex;
   min-height: 100vh;
   background-color: var(--bg-app);
+  position: relative;
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 .app-main {
@@ -14,7 +19,7 @@
 
 .page-content {
   flex: 1;
-  padding: 28px 32px;
+  padding: 24px 32px;
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
@@ -23,7 +28,7 @@
 .app-footer {
   background-color: var(--bg-surface);
   border-top: 1px solid var(--border-light);
-  padding: 14px 32px;
+  padding: 12px 28px;
   font-size: 0.75rem;
   color: var(--color-text-dim);
   display: flex;
@@ -37,21 +42,90 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+.footer-brand {
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.footer-author {
+  color: var(--color-text-muted);
+}
+
 .sep {
-  color: var(--border-light);
+  color: var(--border-strong);
 }
 
 .footer-badges {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+
 .tech-pill {
   background-color: var(--bg-surface-subtle);
   border: 1px solid var(--border-light);
   color: var(--color-text-muted);
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: var(--radius-sm);
-  font-size: 0.7rem;
+  font-size: 0.6875rem;
   font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Adaptabilité responsive pour écrans tablettes et mobiles */
+@media (max-width: 1023px) {
+  .app-shell {
+    overflow-x: hidden;
+  }
+
+  app-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1050;
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .app-shell.sidebar-open app-sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(2px);
+    z-index: 1040;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  .sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .page-content {
+    padding: 20px 20px;
+  }
+
+  .app-footer {
+    padding: 14px 20px;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-content {
+    padding: 16px 14px;
+  }
 }

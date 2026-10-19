@@ -50,10 +50,22 @@ export interface CardAuditLog {
   createdAt: string;
 }
 
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+}
+
 export interface CardAuditResponse {
   cardUid: string;
   totalCount: number;
   limit: number;
   offset: number;
   auditLogs: CardAuditLog[];
+  items?: CardAuditLog[];
+  page?: number;
+  pageSize?: number;
+  totalPages?: number;
 }
