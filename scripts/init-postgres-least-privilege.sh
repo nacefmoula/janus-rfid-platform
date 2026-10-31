@@ -30,18 +30,18 @@ is_known_dev_password() {
     esac
 }
 
-if [ "${ENVIRONMENT_LOWER}" != "development" ]; then
-    if [ -z "${POSTGRES_DB:-}" ] || [ -z "${POSTGRES_USER:-}" ] || [ -z "${POSTGRES_PASSWORD:-}" ] || [ -z "${POSTGRES_RUNTIME_USER:-}" ] || [ -z "${POSTGRES_RUNTIME_PASSWORD:-}" ]; then
+if [[ "${ENVIRONMENT_LOWER}" != "development" ]]; then
+    if [[ -z "${POSTGRES_DB:-}" ]] || [[ -z "${POSTGRES_USER:-}" ]] || [[ -z "${POSTGRES_PASSWORD:-}" ]] || [[ -z "${POSTGRES_RUNTIME_USER:-}" ]] || [[ -z "${POSTGRES_RUNTIME_PASSWORD:-}" ]]; then
         echo "ERROR: In non-development environment ('${ENVIRONMENT_MODE}'), POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_RUNTIME_USER, and POSTGRES_RUNTIME_PASSWORD must be explicitly set without fallback defaults." >&2
         exit 1
     fi
 
-    if is_known_dev_password "${POSTGRES_PASSWORD}" || [ "${#POSTGRES_PASSWORD}" -lt 12 ]; then
+    if is_known_dev_password "${POSTGRES_PASSWORD}" || [[ "${#POSTGRES_PASSWORD}" -lt 12 ]]; then
         echo "ERROR: In non-development environment ('${ENVIRONMENT_MODE}'), POSTGRES_PASSWORD must be a strong non-default secret (minimum 12 characters)." >&2
         exit 1
     fi
 
-    if is_known_dev_password "${POSTGRES_RUNTIME_PASSWORD}" || [ "${#POSTGRES_RUNTIME_PASSWORD}" -lt 12 ]; then
+    if is_known_dev_password "${POSTGRES_RUNTIME_PASSWORD}" || [[ "${#POSTGRES_RUNTIME_PASSWORD}" -lt 12 ]]; then
         echo "ERROR: In non-development environment ('${ENVIRONMENT_MODE}'), POSTGRES_RUNTIME_PASSWORD must be a strong non-default secret (minimum 12 characters)." >&2
         exit 1
     fi
@@ -53,7 +53,7 @@ ADMIN_PASSWORD="${POSTGRES_PASSWORD:-local-dev-db-password-change-me}"
 RUNTIME_USER="${POSTGRES_RUNTIME_USER:-janus_runtime}"
 RUNTIME_PASSWORD="${POSTGRES_RUNTIME_PASSWORD:-local-dev-runtime-password-change-me}"
 
-if [ -z "${DB_NAME}" ] || [ -z "${ADMIN_USER}" ] || [ -z "${ADMIN_PASSWORD}" ] || [ -z "${RUNTIME_USER}" ] || [ -z "${RUNTIME_PASSWORD}" ]; then
+if [[ -z "${DB_NAME}" ]] || [[ -z "${ADMIN_USER}" ]] || [[ -z "${ADMIN_PASSWORD}" ]] || [[ -z "${RUNTIME_USER}" ]] || [[ -z "${RUNTIME_PASSWORD}" ]]; then
     echo "ERROR: Database name, users, and passwords cannot be empty." >&2
     exit 1
 fi
@@ -61,12 +61,12 @@ fi
 ADMIN_USER_LOWER="$(printf '%s' "${ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
 RUNTIME_USER_LOWER="$(printf '%s' "${RUNTIME_USER}" | tr '[:upper:]' '[:lower:]')"
 
-if [ "${ADMIN_USER_LOWER}" = "${RUNTIME_USER_LOWER}" ]; then
+if [[ "${ADMIN_USER_LOWER}" == "${RUNTIME_USER_LOWER}" ]]; then
     echo "ERROR: POSTGRES_RUNTIME_USER ('${RUNTIME_USER}') must be distinct from POSTGRES_USER ('${ADMIN_USER}')." >&2
     exit 1
 fi
 
-if [ "${RUNTIME_USER_LOWER}" = "postgres" ]; then
+if [[ "${RUNTIME_USER_LOWER}" == "postgres" ]]; then
     echo "ERROR: POSTGRES_RUNTIME_USER cannot be the 'postgres' cluster superuser." >&2
     exit 1
 fi
@@ -81,16 +81,16 @@ run_psql() {
         "-v" "runtime_password=${RUNTIME_PASSWORD}"
     )
 
-    if [ -n "${PGHOST:-}" ]; then
+    if [[ -n "${PGHOST:-}" ]]; then
         local host_args=("-h" "${PGHOST}")
-        if [ -n "${PGPORT:-}" ]; then
+        if [[ -n "${PGPORT:-}" ]]; then
             host_args+=("-p" "${PGPORT}")
         fi
         PGPASSWORD="${ADMIN_PASSWORD}" psql "${host_args[@]}" -U "${ADMIN_USER}" -d "${DB_NAME}" "${common_vars[@]}"
-    elif [ -f "/.dockerenv" ] || [ -f "/run/.containerenv" ]; then
+    elif [[ -f "/.dockerenv" ]] || [[ -f "/run/.containerenv" ]]; then
         # Exécution à l'intérieur d'un conteneur Docker/OCI : connexion via socket Unix local
         PGPASSWORD="${ADMIN_PASSWORD}" psql -U "${ADMIN_USER}" -d "${DB_NAME}" "${common_vars[@]}"
-    elif [ -n "${POSTGRES_CONTAINER:-}" ]; then
+    elif [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
         # Exécution depuis l'hôte en ciblant explicitement un conteneur PostgreSQL nommé
         docker exec -i -e PGPASSWORD="${ADMIN_PASSWORD}" "${POSTGRES_CONTAINER}" \
             psql -U "${ADMIN_USER}" -d "${DB_NAME}" "${common_vars[@]}"

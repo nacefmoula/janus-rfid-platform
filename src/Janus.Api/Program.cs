@@ -67,10 +67,10 @@ static bool IsTransientMigrationStartupException(Exception ex)
 
 static async Task ApplyTransactionTimeoutsAsync(JanusDbContext db, int lockTimeoutMs, int statementTimeoutMs)
 {
-    var safeLockMs = Math.Clamp(lockTimeoutMs, 50, 60000);
-    var safeStmtMs = Math.Clamp(statementTimeoutMs, 100, 120000);
-    await db.Database.ExecuteSqlRawAsync(
-        $"SET LOCAL lock_timeout = '{safeLockMs}ms'; SET LOCAL statement_timeout = '{safeStmtMs}ms';");
+    var safeLockMs = $"{Math.Clamp(lockTimeoutMs, 50, 60000)}ms";
+    var safeStmtMs = $"{Math.Clamp(statementTimeoutMs, 100, 120000)}ms";
+    await db.Database.ExecuteSqlAsync(
+        $"SELECT set_config('lock_timeout', {safeLockMs}, true), set_config('statement_timeout', {safeStmtMs}, true);");
 }
 
 static async Task SafeRollbackAsync(IDbContextTransaction? tx, ILogger logger, string operation)

@@ -544,7 +544,9 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var migBuilder = new NpgsqlConnectionStringBuilder(_factory.MigrationConnectionString);
 
         using var adminDb = _factory.CreateMigrationDbContext();
+#pragma warning disable EF1002
         await adminDb.Database.ExecuteSqlRawAsync($"CREATE DATABASE \"{tempDbName}\";");
+#pragma warning restore EF1002
 
         try
         {
@@ -623,12 +625,14 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         finally
         {
             NpgsqlConnection.ClearAllPools();
-            await adminDb.Database.ExecuteSqlRawAsync($@"
+            await adminDb.Database.ExecuteSqlAsync($@"
                 SELECT pg_terminate_backend(pid)
                 FROM pg_stat_activity
-                WHERE datname = '{tempDbName}' AND pid <> pg_backend_pid();");
+                WHERE datname = {tempDbName} AND pid <> pg_backend_pid();");
+#pragma warning disable EF1002
             await adminDb.Database.ExecuteSqlRawAsync($"DROP DATABASE IF EXISTS \"{tempDbName}\";");
             await adminDb.Database.ExecuteSqlRawAsync($"DROP ROLE IF EXISTS \"{tempRuntimeRole}\";");
+#pragma warning restore EF1002
         }
     }
 
@@ -639,7 +643,9 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         // de la migration AddCardAuditLogsProtectionTrigger sans perturber les tests concurrents
         var tempDbName = $"janus_mig_2b1_{Guid.NewGuid():N}"[..26].ToLowerInvariant();
         using var adminDb = _factory.CreateMigrationDbContext();
+#pragma warning disable EF1002
         await adminDb.Database.ExecuteSqlRawAsync($"CREATE DATABASE \"{tempDbName}\";");
+#pragma warning restore EF1002
 
         try
         {
@@ -697,11 +703,13 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         finally
         {
             NpgsqlConnection.ClearAllPools();
-            await adminDb.Database.ExecuteSqlRawAsync($@"
+            await adminDb.Database.ExecuteSqlAsync($@"
                 SELECT pg_terminate_backend(pid)
                 FROM pg_stat_activity
-                WHERE datname = '{tempDbName}' AND pid <> pg_backend_pid();");
+                WHERE datname = {tempDbName} AND pid <> pg_backend_pid();");
+#pragma warning disable EF1002
             await adminDb.Database.ExecuteSqlRawAsync($"DROP DATABASE IF EXISTS \"{tempDbName}\";");
+#pragma warning restore EF1002
         }
     }
 
