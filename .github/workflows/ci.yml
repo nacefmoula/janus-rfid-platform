@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'feat/**'
+      - 'fix/**'
   pull_request:
     branches:
       - main
@@ -186,7 +187,7 @@ jobs:
         run: |
           dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj --configuration Release --logger "console;verbosity=detailed"
 
-      - name: Run 31 Integration Tests (test_api.py)
+      - name: Run 41 Integration Tests (test_api.py)
         run: |
           python3 tests/test_api.py
 

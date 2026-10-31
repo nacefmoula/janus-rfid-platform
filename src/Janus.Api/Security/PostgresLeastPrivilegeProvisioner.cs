@@ -192,6 +192,22 @@ EXECUTE FUNCTION prevent_card_audit_logs_tampering();
             return;
         }
 
+        // REV-2B1-02 / Lot 2C: Réduction de surface dans les journaux PostgreSQL pendant le provisionnement du rôle.
+        // Note de sécurité : log_statement et log_min_duration_statement sont des paramètres de contexte SUSET dans PostgreSQL.
+        // Cette instruction prend effet lorsque le rôle de migration dispose de l'attribut superuser (ex: conteneur postgres:18)
+        // et est ignorée sans erreur (insufficient_privilege) sous un rôle propriétaire non-superutilisateur.
+        // Elle constitue une défense en profondeur locale à la transaction et non une garantie universelle contre un audit externe.
+        const string suppressStatementLoggingSql = @"
+DO $$
+BEGIN
+    EXECUTE 'SET LOCAL log_statement = ''none''';
+    EXECUTE 'SET LOCAL log_min_duration_statement = -1';
+EXCEPTION
+    WHEN insufficient_privilege THEN
+        NULL;
+END $$;";
+        await migrationDb.Database.ExecuteSqlRawAsync(suppressStatementLoggingSql, cancellationToken);
+
         // Injection paramétrée des identifiants en variables de transaction locales (is_local = true)
         // sans aucune interpolation de chaîne SQL non fiable
         var pRuntimeUser = new NpgsqlParameter("runtimeUser", runtimeUser);

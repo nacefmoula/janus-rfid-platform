@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
@@ -467,5 +469,193 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         using var verifyDb = _factory.CreateDbContext();
         var card = await verifyDb.Cards.SingleAsync(c => c.Uid == uid);
         Assert.Equal(1000, card.BalanceMillimes);
+    }
+
+    // --- Scénario 9 (Lot 2C - Condition 4 / P1-1 / P2-1) : Injection d'erreur déterministe post-COMMIT et réconciliation via nouveau scope ---
+    [Fact]
+    public async Task Test09_PostCommitFailure_AmbiguousState_ReconcilesViaFreshScope_WithZeroDoubleDebit_And_DetectsPayloadConflict()
+    {
+        // Note méthodologique : ce test injecte de façon déterministe une NpgsqlException immédiatement après que
+        // PostgreSQL a exécuté COMMIT (via JanusTransactionCommitHook), mais avant que l'application ne retourne sa réponse.
+        // Il valide la branche de réconciliation d'état ambigu dans un nouveau scope DI (IServiceScopeFactory),
+        // distincte d'une véritable coupure de socket TCP physique au niveau OS.
+        var uid = await PrepareCardAsync(10000);
+        var eventId = Guid.NewGuid();
+        var occurredAt = DateTimeOffset.UtcNow;
+
+        var commitHook = _factory.Services.GetRequiredService<JanusTransactionCommitHook>();
+        var beforeRecoveredCount = JanusMetrics.GetAmbiguousCommitRecoveredCount();
+        int hookInvocations = 0;
+
+        commitHook.OnAfterValidationDatabaseCommitAsync = (_, id, _) =>
+        {
+            if (id == eventId)
+            {
+                Interlocked.Increment(ref hookInvocations);
+                throw new NpgsqlException("Simulated transport failure after PostgreSQL COMMIT before acknowledgement", new TimeoutException());
+            }
+            return Task.CompletedTask;
+        };
+
+        try
+        {
+            var resp = await _client.SendAsync(CreateValidationRequest(uid, eventId: eventId, occurredAt: occurredAt));
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+            var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("ACCEPTED", body.GetProperty("decision").GetString());
+            Assert.Equal("ACTIVE_CARD", body.GetProperty("reason").GetString());
+            Assert.True(body.GetProperty("duplicate").GetBoolean());
+            Assert.Equal(8500, body.GetProperty("balanceMillimes").GetInt32());
+            Assert.Equal(1500, body.GetProperty("amountDebited").GetInt32());
+
+            Assert.Equal(1, hookInvocations);
+            Assert.True(JanusMetrics.GetAmbiguousCommitRecoveredCount() > beforeRecoveredCount);
+
+            // Vérification en base via un contexte indépendant : exactement 1 débit financier et solde à 8500 m
+            using var verifyDb = _factory.CreateDbContext();
+            var card = await verifyDb.Cards.AsNoTracking().SingleAsync(c => c.Uid == uid);
+            var fareTxs = await verifyDb.FareTransactions.AsNoTracking().Where(t => t.EventId == eventId).ToListAsync();
+            var validations = await verifyDb.Validations.AsNoTracking().Where(v => v.EventId == eventId).ToListAsync();
+
+            Assert.Equal(8500, card.BalanceMillimes);
+            Assert.Single(fareTxs);
+            Assert.Equal(1500, fareTxs[0].AmountMillimes);
+            Assert.Single(validations);
+
+            // Vérifie également que tout rejeu ultérieur avec un payload différent est rejeté en 409 Conflict
+            var otherUid = await PrepareCardAsync(10000);
+            var conflictResp = await _client.SendAsync(CreateValidationRequest(otherUid, eventId: eventId, occurredAt: occurredAt));
+            Assert.Equal(HttpStatusCode.Conflict, conflictResp.StatusCode);
+        }
+        finally
+        {
+            commitHook.OnAfterValidationDatabaseCommitAsync = null;
+        }
+    }
+
+    // --- Scénario 10 (Lot 2C - Condition 3 / P1-3) : Course concurrente à la création d'une nouvelle carte sur PUT /api/cards/{uid} ---
+    [Fact]
+    public async Task Test10_Concurrent_NewCardCreation_PutUpsert_SerializesUnderLock_WithOrderedAuditTrail_And_ConsistentBalance()
+    {
+        var newUid = "04NEW" + Guid.NewGuid().ToString("N")[..9].ToUpperInvariant();
+        using var barrier = new Barrier(2);
+
+        var taskA = Task.Run(async () =>
+        {
+            using var clientA = _factory.CreateClient();
+            barrier.SignalAndWait(TimeSpan.FromSeconds(5));
+            return await clientA.SendAsync(CreateCardUpsertRequest(
+                newUid,
+                balanceMillimes: 4500,
+                status: "Active",
+                label: "Pass Initial A",
+                reason: "Provisionnement concurrent A"));
+        });
+
+        var taskB = Task.Run(async () =>
+        {
+            using var clientB = _factory.CreateClient();
+            barrier.SignalAndWait(TimeSpan.FromSeconds(5));
+            return await clientB.SendAsync(CreateCardUpsertRequest(
+                newUid,
+                balanceMillimes: 9000,
+                status: "Revoked",
+                label: "Pass Concurrent B",
+                reason: "Mise à jour concurrente B"));
+        });
+
+        await Task.WhenAll(taskA, taskB);
+
+        var respA = await taskA;
+        var respB = await taskB;
+
+        Assert.Equal(HttpStatusCode.OK, respA.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, respB.StatusCode);
+
+        using var verifyDb = _factory.CreateDbContext();
+        var cards = await verifyDb.Cards.AsNoTracking().Where(c => c.Uid == newUid).ToListAsync();
+        var audits = await verifyDb.CardAuditLogs.AsNoTracking()
+            .Where(a => a.CardUid == newUid)
+            .OrderBy(a => a.Id)
+            .ToListAsync();
+
+        // 1. Unicité stricte de la carte créée
+        Assert.Single(cards);
+        var finalCard = cards[0];
+
+        // 2. Exactement 2 entrées d'audit sérialisées dans l'ordre chronologique d'engagement (Id croissant)
+        Assert.Equal(2, audits.Count);
+        var firstAudit = audits[0];
+        var secondAudit = audits[1];
+
+        Assert.Equal("ADMIN_CARD_CREATED", firstAudit.Action);
+        Assert.Null(firstAudit.PreviousBalanceMillimes);
+        Assert.Null(firstAudit.PreviousStatus);
+
+        Assert.Equal("ADMIN_CARD_UPDATED", secondAudit.Action);
+        // 3. Cohérence stricte de la chaîne d'audit : le PreviousBalance/Status de la 2e opération DOIT égaler le NewBalance/Status de la 1re
+        Assert.Equal(firstAudit.NewBalanceMillimes, secondAudit.PreviousBalanceMillimes);
+        Assert.Equal(firstAudit.NewStatus, secondAudit.PreviousStatus);
+
+        // 4. L'état final de la carte dans Cards correspond exactement à la seconde transaction engagée (aucun écrasement silencieux non tracé)
+        Assert.Equal(secondAudit.NewBalanceMillimes, finalCard.BalanceMillimes);
+        Assert.Equal(secondAudit.NewStatus, finalCard.Status.ToString());
+        Assert.True(finalCard.BalanceMillimes == 4500 || finalCard.BalanceMillimes == 9000);
+    }
+
+    // --- Scénario 11 (Lot 2C - Condition 3 / P1-2) : Dépassement de lock_timeout (55P03) -> 503 Service Unavailable sans retry ---
+    [Fact]
+    public async Task Test11_LockTimeout_UnderRowContention_Returns503DatabaseBusy_WithoutRetry_And_PreservesBalance()
+    {
+        var uid = await PrepareCardAsync(6000);
+
+        using var shortLockFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, cfg) =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:LockTimeoutMs"] = "150",
+                    ["Database:StatementTimeoutMs"] = "2000"
+                });
+            });
+        });
+
+        using var shortLockClient = shortLockFactory.CreateClient();
+
+        // 1. Maintient un verrou pessimiste exclusif FOR UPDATE sur la carte
+        using var lockDb = _factory.CreateDbContext();
+        await using var lockTx = await lockDb.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+        var lockedCard = await lockDb.Cards
+            .FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {uid} FOR UPDATE")
+            .SingleAsync();
+        Assert.Equal(6000, lockedCard.BalanceMillimes);
+
+        try
+        {
+            // 2. La validation concurrente doit expirer rapidement (55P03) et retourner 503 Service Unavailable (error = database_busy)
+            var valResp = await shortLockClient.SendAsync(CreateValidationRequest(uid));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, valResp.StatusCode);
+            var valBody = await valResp.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("database_busy", valBody.GetProperty("error").GetString());
+
+            // 3. La mise à jour administrative concurrente doit également retourner 503 Service Unavailable
+            var putResp = await shortLockClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 15000));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, putResp.StatusCode);
+            var putBody = await putResp.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("database_busy", putBody.GetProperty("error").GetString());
+        }
+        finally
+        {
+            await lockTx.RollbackAsync();
+        }
+
+        // 4. Vérification que le solde et les tables financières sont restés intacts
+        using var verifyDb = _factory.CreateDbContext();
+        var untouchedCard = await verifyDb.Cards.AsNoTracking().SingleAsync(c => c.Uid == uid);
+        var fareTxs = await verifyDb.FareTransactions.AsNoTracking().Where(t => t.CardUid == uid).ToListAsync();
+        Assert.Equal(6000, untouchedCard.BalanceMillimes);
+        Assert.Empty(fareTxs);
     }
 }

@@ -109,12 +109,26 @@ run_psql() {
 echo "==> Application des privilèges PostgreSQL de sécurité (Base: ${DB_NAME}, Rôle Migration: ${ADMIN_USER}, Rôle Runtime: ${RUNTIME_USER})..."
 
 run_psql <<-'EOSQL'
+    BEGIN;
+
+    -- REV-2B1-02 / Lot 2C : Désactivation locale à la transaction de la journalisation SQL (contexte SUSET).
+    -- Prend effet lorsque le rôle d'administration est superutilisateur (cas standard de /docker-entrypoint-initdb.d/)
+    -- et s'ignore proprement sous un rôle non-superutilisateur. Ne remplace pas la sécurisation des logs serveur.
+    DO $$
+    BEGIN
+        EXECUTE 'SET LOCAL log_statement = ''none''';
+        EXECUTE 'SET LOCAL log_min_duration_statement = -1';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            NULL;
+    END $$;
+
     SELECT 1 AS config_loaded
     FROM (
-        SELECT set_config('janus.db_name', :'db_name', false),
-               set_config('janus.admin_user', :'admin_user', false),
-               set_config('janus.runtime_user', :'runtime_user', false),
-               set_config('janus.runtime_password', :'runtime_password', false)
+        SELECT set_config('janus.db_name', :'db_name', true),
+               set_config('janus.admin_user', :'admin_user', true),
+               set_config('janus.runtime_user', :'runtime_user', true),
+               set_config('janus.runtime_password', :'runtime_password', true)
     ) AS _cfg;
 
     DO $$
@@ -149,7 +163,7 @@ run_psql <<-'EOSQL'
         END IF;
 
         -- Effacement immédiat du secret en mémoire de session PostgreSQL
-        PERFORM set_config('janus.runtime_password', '', false);
+        PERFORM set_config('janus.runtime_password', '', true);
 
         -- 2. Durcissement de la base de données et du schéma public
         EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC', v_db_name);
@@ -205,6 +219,8 @@ run_psql <<-'EOSQL'
             END IF;
         END LOOP;
     END $$;
+
+    COMMIT;
 EOSQL
 
 echo "==> Privilèges appliqués avec succès pour le rôle '${RUNTIME_USER}'."

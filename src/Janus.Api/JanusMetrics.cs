@@ -53,9 +53,44 @@ public static class JanusMetrics
         unit: "{denial}",
         description: "Nombre total de refus d'autorisation");
 
+    /// <summary>
+    /// Total number of non-nominal database transactional resilience events.
+    /// Labels: operation (validation | card_upsert), outcome (conflict_recovered | ambiguous_commit_recovered | transient_retry | lock_timeout).
+    /// Strictly bounded cardinality — NO card UIDs, event IDs, or SQL messages.
+    /// </summary>
+    public static readonly Counter<long> DbTransactionEventsTotal = Meter.CreateCounter<long>(
+        "janus_db_transaction_events_total",
+        unit: "{event}",
+        description: "Nombre total d'événements de résilience transactionnelle PostgreSQL");
+
+    public static void RecordDbTransactionEvent(string operation, string outcome)
+    {
+        if (string.Equals(outcome, "ambiguous_commit_recovered", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _ambiguousCommitRecoveredCount);
+        }
+
+        DbTransactionEventsTotal.Add(1,
+            new KeyValuePair<string, object?>("operation", operation),
+            new KeyValuePair<string, object?>("outcome", outcome));
+    }
+
     private static long _conflictValidationsCount;
+    private static long _ambiguousCommitRecoveredCount;
 
     public static void RecordConflictValidation() => Interlocked.Increment(ref _conflictValidationsCount);
 
     public static long GetConflictValidationsCount() => Interlocked.Read(ref _conflictValidationsCount);
+
+    public static long GetAmbiguousCommitRecoveredCount() => Interlocked.Read(ref _ambiguousCommitRecoveredCount);
+}
+
+/// <summary>
+/// Point d'interception injectable pour les tests d'intégration permettant de simuler de manière déterministe
+/// une perte de connexion ou un échec d'acquittement immédiatement après que PostgreSQL a exécuté COMMIT.
+/// En production, le délégué est null (aucun effet).
+/// </summary>
+public sealed class JanusTransactionCommitHook
+{
+    public Func<string, Guid, CancellationToken, Task>? OnAfterValidationDatabaseCommitAsync { get; set; }
 }

@@ -839,6 +839,84 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         Assert.NotNull(client);
     }
 
+    [Fact]
+    public async Task SEC_LOT2C_13_InitScript_InProductionEnvironment_RejectsKnownDevPasswords_WithNonZeroExitCode()
+    {
+        var scriptPath = FindRepoFile("scripts/init-postgres-least-privilege.sh");
+
+        // Cas 1 : Mot de passe admin de développement en environnement Production -> rejeté (exit 1) sans fuite du secret
+        var (exitCodeAdminDev, outputAdminDev) = await RunInitScriptAsync(
+            scriptPath,
+            "janus_db",
+            "janus_app",
+            "local-dev-db-password-change-me",
+            "janus_runtime",
+            "StrongRuntimePass_999999!",
+            environmentMode: "Production");
+
+        Assert.NotEqual(0, exitCodeAdminDev);
+        Assert.Contains("POSTGRES_PASSWORD must be a strong non-default secret", outputAdminDev);
+        Assert.DoesNotContain("local-dev-db-password-change-me", outputAdminDev);
+        Assert.DoesNotContain("StrongRuntimePass_999999!", outputAdminDev);
+
+        // Cas 2 : Mot de passe runtime de développement en environnement Production -> rejeté (exit 1) sans fuite du secret
+        var (exitCodeRuntimeDev, outputRuntimeDev) = await RunInitScriptAsync(
+            scriptPath,
+            "janus_db",
+            "janus_app",
+            "StrongAdminPass_999999!",
+            "janus_runtime",
+            "local-dev-runtime-password-change-me",
+            environmentMode: "Production");
+
+        Assert.NotEqual(0, exitCodeRuntimeDev);
+        Assert.Contains("POSTGRES_RUNTIME_PASSWORD must be a strong non-default secret", outputRuntimeDev);
+        Assert.DoesNotContain("local-dev-runtime-password-change-me", outputRuntimeDev);
+        Assert.DoesNotContain("StrongAdminPass_999999!", outputRuntimeDev);
+    }
+
+    [Fact]
+    public void SEC_LOT2C_14_MigrateOnlyMode_RejectsContradictoryOrMissingMigrationConfiguration()
+    {
+        // Cas 1 : MigrateOnly=true et SkipMigration=true simultanément -> rejeté au démarrage
+        using var contradictoryFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:MigrateOnly"] = "true",
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = _factory.RuntimeConnectionString,
+                    ["ConnectionStrings:MigrationDb"] = _factory.MigrationConnectionString
+                });
+            });
+        });
+
+        var exContradictory = Assert.ThrowsAny<Exception>(() => contradictoryFactory.CreateClient());
+        Assert.Contains("Database:MigrateOnly", exContradictory.ToString());
+
+        // Cas 2 : MigrateOnly=true sans ConnectionStrings:MigrationDb -> rejeté au démarrage
+        using var missingMigConnFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:MigrateOnly"] = "true",
+                    ["Database:SkipMigration"] = "false",
+                    ["ConnectionStrings:JanusDb"] = _factory.RuntimeConnectionString,
+                    ["ConnectionStrings:MigrationDb"] = ""
+                });
+            });
+        });
+
+        var exMissingConn = Assert.ThrowsAny<Exception>(() => missingMigConnFactory.CreateClient());
+        Assert.Contains("ConnectionStrings:MigrationDb", exMissingConn.ToString());
+    }
+
     private static string FindRepoFile(string relativePath)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -861,7 +939,8 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         string adminUser,
         string adminPassword,
         string runtimeUser,
-        string runtimePassword)
+        string runtimePassword,
+        string environmentMode = "Development")
     {
         var psi = new ProcessStartInfo("bash", [scriptPath])
         {
@@ -871,7 +950,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
             UseShellExecute = false
         };
 
-        psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
+        psi.Environment["ASPNETCORE_ENVIRONMENT"] = environmentMode;
         psi.Environment["POSTGRES_DB"] = dbName;
         psi.Environment["POSTGRES_USER"] = adminUser;
         psi.Environment["POSTGRES_PASSWORD"] = adminPassword;
