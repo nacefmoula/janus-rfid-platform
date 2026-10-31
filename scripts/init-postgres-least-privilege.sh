@@ -18,9 +18,10 @@ ENVIRONMENT_MODE="${ASPNETCORE_ENVIRONMENT:-${JANUS_ENVIRONMENT:-Development}}"
 ENVIRONMENT_LOWER="$(printf '%s' "${ENVIRONMENT_MODE}" | tr '[:upper:]' '[:lower:]')"
 
 is_known_dev_password() {
-    local val="$1"
+    local val
+    val="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     case "${val}" in
-        "local-dev-db-password-change-me"|"local-dev-runtime-password-change-me"|"postgres"|"password"|"admin"|"change-me")
+        "local-dev-db-password-change-me"|"local-dev-runtime-password-change-me"|"change_me_runtime_only"|"postgres"|"password"|"admin"|"change-me"|"change_me"|*change-me*|*change_me*)
             return 0
             ;;
         *)

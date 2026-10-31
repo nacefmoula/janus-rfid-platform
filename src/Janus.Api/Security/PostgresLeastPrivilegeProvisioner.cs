@@ -11,10 +11,12 @@ public static class PostgresLeastPrivilegeProvisioner
     [
         "local-dev-db-password-change-me",
         "local-dev-runtime-password-change-me",
+        "change_me_runtime_only",
         "postgres",
         "password",
         "admin",
-        "change-me"
+        "change-me",
+        "change_me"
     ];
 
     public static bool IsKnownDevelopmentPassword(string? password)
@@ -25,6 +27,12 @@ public static class PostgresLeastPrivilegeProvisioner
         }
 
         var trimmed = password.Trim();
+        if (trimmed.Contains("change-me", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("change_me", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         foreach (var candidate in KnownDevDatabasePasswords)
         {
             if (string.Equals(trimmed, candidate, StringComparison.OrdinalIgnoreCase))

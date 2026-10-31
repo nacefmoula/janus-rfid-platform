@@ -419,6 +419,18 @@ if (!skipMigrationConfig || migrateOnlyConfig)
                 break;
             } catch (Exception ex) when (attempt < maxMigrationRetries && IsTransientMigrationStartupException(ex)) {
                 await Task.Delay(TimeSpan.FromSeconds(2));
+            } catch (Exception ex) {
+                var sqlState = TryGetPostgresSqlState(ex) ?? "none";
+                app.Logger.LogCritical(
+                    "Database migration or least-privilege provisioning failed (sqlState={SqlState}, exceptionType={ExceptionType}, attempt={Attempt}).",
+                    sqlState,
+                    ex.GetType().Name,
+                    attempt + 1);
+                if (migrateOnlyConfig) {
+                    await app.DisposeAsync();
+                    return 1;
+                }
+                throw;
             }
         }
     }
@@ -440,6 +452,18 @@ if (!skipMigrationConfig || migrateOnlyConfig)
                     break;
                 } catch (Exception ex) when (attempt < maxMigrationRetries && IsTransientMigrationStartupException(ex)) {
                     await Task.Delay(TimeSpan.FromSeconds(2));
+                } catch (Exception ex) {
+                    var sqlState = TryGetPostgresSqlState(ex) ?? "none";
+                    app.Logger.LogCritical(
+                        "Database startup migration failed (sqlState={SqlState}, exceptionType={ExceptionType}, attempt={Attempt}).",
+                        sqlState,
+                        ex.GetType().Name,
+                        attempt + 1);
+                    if (migrateOnlyConfig) {
+                        await app.DisposeAsync();
+                        return 1;
+                    }
+                    throw;
                 }
             }
         }
@@ -448,7 +472,8 @@ if (!skipMigrationConfig || migrateOnlyConfig)
     if (migrateOnlyConfig)
     {
         app.Logger.LogInformation("Database migrations and least-privilege provisioning completed successfully (MigrateOnly mode). Exiting.");
-        return;
+        await app.DisposeAsync();
+        return 0;
     }
 }
 
@@ -1238,3 +1263,4 @@ app.MapPost("/api/validations", async (ValidationRequest request, ClaimsPrincipa
 }).RequireAuthorization("TerminalOnly").RequireRateLimiting("ValidationsPolicy");
 
 await app.RunAsync();
+return 0;

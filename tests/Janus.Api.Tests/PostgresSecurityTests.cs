@@ -760,6 +760,30 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var exMig = Assert.ThrowsAny<Exception>(() => badMigrationPassFactory.CreateClient());
         Assert.Contains("ConnectionStrings:MigrationDb", exMig.ToString());
         Assert.DoesNotContain("local-dev-db-password-change-me", exMig.ToString());
+
+        // Cas 3 : Placeholder 'change_me_runtime_only' en Production -> explicitement rejeté sans fuite du secret
+        Assert.True(PostgresLeastPrivilegeProvisioner.IsKnownDevelopmentPassword("change_me_runtime_only"));
+        using var badChangeMeRuntimeOnlyFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = "Host=localhost;Port=5433;Database=janus_db;Username=janus_runtime;Password=change_me_runtime_only",
+                    ["ConnectionStrings:MigrationDb"] = "",
+                    ["TerminalAuth:DemoToken"] = strongTerm1,
+                    ["TerminalAuth:Terminal2Token"] = strongTerm2,
+                    ["AdminAuth:DemoToken"] = strongAdmin,
+                    ["MetricsAuth:ScrapeToken"] = strongScrape
+                });
+            });
+        });
+
+        var exChangeMe = Assert.ThrowsAny<Exception>(() => badChangeMeRuntimeOnlyFactory.CreateClient());
+        Assert.Contains("ConnectionStrings:JanusDb", exChangeMe.ToString());
+        Assert.DoesNotContain("change_me_runtime_only", exChangeMe.ToString());
     }
 
     [Fact]
@@ -873,6 +897,20 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         Assert.Contains("POSTGRES_RUNTIME_PASSWORD must be a strong non-default secret", outputRuntimeDev);
         Assert.DoesNotContain("local-dev-runtime-password-change-me", outputRuntimeDev);
         Assert.DoesNotContain("StrongAdminPass_999999!", outputRuntimeDev);
+
+        // Cas 3 : Placeholder 'change_me_runtime_only' en environnement Production -> rejeté (exit 1) sans fuite du secret
+        var (exitCodeChangeMeRuntime, outputChangeMeRuntime) = await RunInitScriptAsync(
+            scriptPath,
+            "janus_db",
+            "janus_app",
+            "StrongAdminPass_999999!",
+            "janus_runtime",
+            "change_me_runtime_only",
+            environmentMode: "Production");
+
+        Assert.NotEqual(0, exitCodeChangeMeRuntime);
+        Assert.Contains("POSTGRES_RUNTIME_PASSWORD must be a strong non-default secret", outputChangeMeRuntime);
+        Assert.DoesNotContain("change_me_runtime_only", outputChangeMeRuntime);
     }
 
     [Fact]
@@ -915,6 +953,49 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
 
         var exMissingConn = Assert.ThrowsAny<Exception>(() => missingMigConnFactory.CreateClient());
         Assert.Contains("ConnectionStrings:MigrationDb", exMissingConn.ToString());
+    }
+
+    [Fact]
+    public async Task SEC_LOT2C_15_MigrateOnlyProcess_WhenAuthenticationFailsWith28P01_ExitsCleanlyWithCode1AndDiagnosticLog()
+    {
+        var apiAssemblyPath = typeof(Program).Assembly.Location;
+        Assert.True(File.Exists(apiAssemblyPath), $"Expected Janus.Api assembly at '{apiAssemblyPath}'.");
+
+        var invalidMigBuilder = new NpgsqlConnectionStringBuilder(_factory.MigrationConnectionString)
+        {
+            Password = "invalid_migrator_password_test_28p01"
+        };
+
+        var psi = new ProcessStartInfo("dotnet", [apiAssemblyPath, "--migrate-only"])
+        {
+            WorkingDirectory = Path.GetDirectoryName(apiAssemblyPath)!,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+
+        psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
+        psi.Environment["Database__MigrateOnly"] = "true";
+        psi.Environment["Database__SkipMigration"] = "false";
+        psi.Environment["Database__MigrationMaxRetries"] = "2";
+        psi.Environment["ConnectionStrings__JanusDb"] = _factory.RuntimeConnectionString;
+        psi.Environment["ConnectionStrings__MigrationDb"] = invalidMigBuilder.ConnectionString;
+
+        var sw = Stopwatch.StartNew();
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start dotnet --migrate-only process.");
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        sw.Stop();
+
+        var combinedOutput = await stdoutTask + "\n" + await stderrTask;
+
+        // Le processus doit terminer proprement avec le code 1 (et non 0, 134 SIGABRT ou 139 SIGSEGV) sans boucler sur les retries
+        Assert.Equal(1, proc.ExitCode);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"Expected fail-fast on 28P01 without retry loop, but took {sw.Elapsed.TotalSeconds:F2}s.");
+        Assert.Contains("Database migration or least-privilege provisioning failed", combinedOutput);
+        Assert.Contains("sqlState=28P01", combinedOutput);
+        Assert.DoesNotContain("invalid_migrator_password_test_28p01", combinedOutput);
     }
 
     private static string FindRepoFile(string relativePath)
