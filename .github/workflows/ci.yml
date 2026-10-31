@@ -417,7 +417,9 @@ jobs:
 
       - name: Initialize PostgreSQL least-privilege role for SonarCloud test suite
         if: steps.check_token.outputs.has_token == 'true'
-        run: ./scripts/init-postgres-least-privilege.sh
+        run: |
+          ./scripts/init-postgres-least-privilege.sh
+          dotnet run --project src/Janus.Api/Janus.Api.csproj --configuration Release --no-build -- --migrate-only
 
       - name: Execute .NET tests with OpenCover collection
         if: steps.check_token.outputs.has_token == 'true'

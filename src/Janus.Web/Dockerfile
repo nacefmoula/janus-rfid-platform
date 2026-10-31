@@ -18,8 +18,10 @@ RUN npm run build -- --configuration production
 # ==========================================
 FROM nginx:1.27-alpine AS runtime
 
-# Préparation des répertoires d'exécution et permissions pour l'utilisateur non privilégié nginx
-RUN touch /run/nginx.pid && \
+# Préparation des répertoires d'exécution, mise à jour de sécurité des paquets OS Alpine et permissions non-root
+RUN apk update && \
+    apk upgrade --no-cache && \
+    touch /run/nginx.pid && \
     chown -R nginx:nginx /run/nginx.pid /var/cache/nginx /var/log/nginx
 
 # Copie des fichiers statiques compilés (détenus par root, lecture seule pour nginx)

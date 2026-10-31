@@ -405,16 +405,41 @@ if (!skipMigrationConfig || migrateOnlyConfig)
 
         for (int attempt = 0; ; attempt++) {
             try {
-                await using var migrationDb = new JanusDbContext(migrationOptions);
-                await migrationDb.Database.MigrateAsync();
-                await PostgresLeastPrivilegeProvisioner.EnsureProvisionedAsync(migrationDb, runtimeConn, migrationConn);
-                // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
-                if (app.Environment.IsDevelopment() && !await migrationDb.Cards.AnyAsync()) {
-                    migrationDb.Cards.AddRange(
-                        new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
-                        new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
-                    );
-                    await migrationDb.SaveChangesAsync();
+                await using var migrationLockConn = new NpgsqlConnection(migrationConn);
+                await migrationLockConn.OpenAsync();
+                await using (var lockCmd = migrationLockConn.CreateCommand())
+                {
+                    lockCmd.CommandTimeout = 30;
+                    lockCmd.CommandText = "SELECT pg_advisory_lock(20261019, 1);";
+                    await lockCmd.ExecuteNonQueryAsync();
+                }
+
+                try
+                {
+                    await using var migrationDb = new JanusDbContext(migrationOptions);
+                    await migrationDb.Database.MigrateAsync();
+                    await PostgresLeastPrivilegeProvisioner.EnsureProvisionedAsync(migrationDb, runtimeConn, migrationConn);
+                    // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
+                    if (app.Environment.IsDevelopment() && !await migrationDb.Cards.AnyAsync()) {
+                        migrationDb.Cards.AddRange(
+                            new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
+                            new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
+                        );
+                        await migrationDb.SaveChangesAsync();
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        await using var unlockCmd = migrationLockConn.CreateCommand();
+                        unlockCmd.CommandText = "SELECT pg_advisory_unlock(20261019, 1);";
+                        await unlockCmd.ExecuteNonQueryAsync();
+                    }
+                    catch
+                    {
+                        // La fermeture de migrationLockConn libère automatiquement le verrou de session PostgreSQL
+                    }
                 }
                 break;
             } catch (Exception ex) when (attempt < maxMigrationRetries && IsTransientMigrationStartupException(ex)) {
