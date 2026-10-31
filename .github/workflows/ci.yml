@@ -84,9 +84,12 @@ jobs:
       POSTGRES_DB: janus_ci_db
       POSTGRES_USER: janus_ci_user
       POSTGRES_PASSWORD: ci_test_password_secure_99
+      POSTGRES_RUNTIME_USER: janus_runtime
+      POSTGRES_RUNTIME_PASSWORD: ci_runtime_password_secure_99
       TERMINAL_DEMO_TOKEN: ci_terminal_token_secure_99
       TERMINAL_02_TOKEN: ci_terminal_02_token_secure_99
       ADMIN_DEMO_TOKEN: ci_admin_token_secure_99
+      METRICS_SCRAPE_TOKEN: ci_metrics_scrape_token_secure_99
       FARE_AMOUNT_MILLIMES: 1500
       ANTIPASSBACK_ENABLED: "true"
       ANTIPASSBACK_WINDOW_SECONDS: "30"
@@ -333,10 +336,14 @@ jobs:
       POSTGRES_DB: janus_ci_db
       POSTGRES_USER: janus_ci_user
       POSTGRES_PASSWORD: ci_test_password_secure_99
-      ConnectionStrings__JanusDb: "Host=localhost;Port=5433;Database=janus_ci_db;Username=janus_ci_user;Password=ci_test_password_secure_99"
+      POSTGRES_RUNTIME_USER: janus_runtime
+      POSTGRES_RUNTIME_PASSWORD: ci_runtime_password_secure_99
+      ConnectionStrings__JanusDb: "Host=localhost;Port=5433;Database=janus_ci_db;Username=janus_runtime;Password=ci_runtime_password_secure_99"
+      ConnectionStrings__MigrationDb: "Host=localhost;Port=5433;Database=janus_ci_db;Username=janus_ci_user;Password=ci_test_password_secure_99"
       TERMINAL_DEMO_TOKEN: ci_terminal_token_secure_99
       TERMINAL_02_TOKEN: ci_terminal_02_token_secure_99
       ADMIN_DEMO_TOKEN: ci_admin_token_secure_99
+      METRICS_SCRAPE_TOKEN: ci_metrics_scrape_token_secure_99
       FARE_AMOUNT_MILLIMES: 1500
       ANTIPASSBACK_ENABLED: "true"
       ANTIPASSBACK_WINDOW_SECONDS: "30"
@@ -406,6 +413,10 @@ jobs:
       - name: Compile solution under Sonar analysis
         if: steps.check_token.outputs.has_token == 'true'
         run: dotnet build --configuration Release --no-restore
+
+      - name: Initialize PostgreSQL least-privilege role for SonarCloud test suite
+        if: steps.check_token.outputs.has_token == 'true'
+        run: ./scripts/init-postgres-least-privilege.sh
 
       - name: Execute .NET tests with OpenCover collection
         if: steps.check_token.outputs.has_token == 'true'

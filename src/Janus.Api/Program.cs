@@ -251,6 +251,15 @@ if (configuredTokens.Count != configuredTokens.Distinct(StringComparer.Ordinal).
     throw new InvalidOperationException("Security configuration error: Distinct tokens are required across Terminal1, Terminal2, Admin, and MetricsScrape.");
 }
 
+var skipMigrationConfig = app.Configuration.GetValue<bool>("Database:SkipMigration", false);
+if (!isDev)
+{
+    PostgresLeastPrivilegeProvisioner.ValidateProductionDatabaseConfiguration(
+        app.Configuration.GetConnectionString("JanusDb"),
+        app.Configuration.GetConnectionString("MigrationDb"),
+        skipMigrationConfig);
+}
+
 // JANUS-SEC-009: Gestionnaire d'exception global retournant une réponse JSON standardisée avec traceId et masquant les piles d'appels internes
 app.UseExceptionHandler(exceptionHandlerApp =>
 {
@@ -290,9 +299,10 @@ app.MapPrometheusScrapingEndpoint()
     .RequireAuthorization("MetricsScrape")
     .RequireRateLimiting("CardsReadPolicy");
 
-// JANUS-SEC-018 / Lot 2B: Séparation stricte entre rôle de migration (DDL) et rôle runtime (DML moindre privilège)
-if (!app.Configuration.GetValue<bool>("Database:SkipMigration", false))
+// JANUS-SEC-018 / Lot 2B & 2B.1: Séparation stricte entre rôle de migration (DDL) et rôle runtime (DML moindre privilège)
+if (!skipMigrationConfig)
 {
+    var runtimeConn = app.Configuration.GetConnectionString("JanusDb");
     var migrationConn = app.Configuration.GetConnectionString("MigrationDb");
     if (!string.IsNullOrWhiteSpace(migrationConn))
     {
@@ -304,6 +314,7 @@ if (!app.Configuration.GetValue<bool>("Database:SkipMigration", false))
             try {
                 await using var migrationDb = new JanusDbContext(migrationOptions);
                 await migrationDb.Database.MigrateAsync();
+                await PostgresLeastPrivilegeProvisioner.EnsureProvisionedAsync(migrationDb, runtimeConn, migrationConn);
                 // REV-07: Le provisionnement automatique des cartes de démonstration est strictement limité à Development
                 if (app.Environment.IsDevelopment() && !await migrationDb.Cards.AnyAsync()) {
                     migrationDb.Cards.AddRange(

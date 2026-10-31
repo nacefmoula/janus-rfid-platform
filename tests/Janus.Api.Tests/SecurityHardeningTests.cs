@@ -619,10 +619,8 @@ public class SecurityHardeningTests : IAsyncLifetime
         var strongTerminal2 = "prod-t2-" + Guid.NewGuid().ToString("N");
         var strongAdmin = "prod-adm-" + Guid.NewGuid().ToString("N");
         var strongScrape = "prod-scr-" + Guid.NewGuid().ToString("N");
-        var dbConn = Environment.GetEnvironmentVariable("ConnectionStrings__JanusDb")
-            ?? (Environment.GetEnvironmentVariable("POSTGRES_DB") != null
-                ? $"Host=localhost;Port=5433;Database={Environment.GetEnvironmentVariable("POSTGRES_DB")};Username={Environment.GetEnvironmentVariable("POSTGRES_USER")};Password={Environment.GetEnvironmentVariable("POSTGRES_PASSWORD")}"
-                : "Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password=local-dev-db-password-change-me");
+        var strongRuntimeDbPass = "prod-rt-db-" + Guid.NewGuid().ToString("N");
+        var strongMigrationDbPass = "prod-mig-db-" + Guid.NewGuid().ToString("N");
 
         using var prodFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -631,7 +629,9 @@ public class SecurityHardeningTests : IAsyncLifetime
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ConnectionStrings:JanusDb"] = dbConn,
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = $"Host=localhost;Port=5433;Database=janus_db;Username=janus_runtime;Password={strongRuntimeDbPass}",
+                    ["ConnectionStrings:MigrationDb"] = $"Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password={strongMigrationDbPass}",
                     ["TerminalAuth:DemoToken"] = strongTerminal1,
                     ["TerminalAuth:Terminal2Token"] = strongTerminal2,
                     ["AdminAuth:DemoToken"] = strongAdmin,
@@ -771,6 +771,9 @@ public class SecurityHardeningTests : IAsyncLifetime
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
+                    ["Database:SkipMigration"] = "true",
+                    ["ConnectionStrings:JanusDb"] = "Host=localhost;Port=5433;Database=janus_db;Username=janus_runtime;Password=prod-strong-runtime-db-pass-32chars!",
+                    ["ConnectionStrings:MigrationDb"] = "Host=localhost;Port=5433;Database=janus_db;Username=janus_app;Password=prod-strong-migration-db-pass-32chars!",
                     ["Testing:EnableFaultEndpoint"] = "true",
                     ["TerminalAuth:DemoToken"] = "prod-strong-terminal-key-32chars!",
                     ["TerminalAuth:Terminal2Token"] = "prod-strong-terminal2-key-32chars!",
