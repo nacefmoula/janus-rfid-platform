@@ -1,9 +1,6 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
@@ -17,6 +14,14 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <!-- Lot 4 : namespaces issus de la restructuration (domaine, persistance, observabilité). -->
+    <Using Include="Janus.Domain" />
+    <Using Include="Janus.Domain.Cards" />
+    <Using Include="Janus.Domain.Validations" />
+    <Using Include="Janus.Domain.Wallet" />
+    <Using Include="Janus.Api.Infrastructure.Persistence" />
+    <Using Include="Janus.Api.Observability" />
+    <Using Include="Janus.Api.Features.Validations" />
   </ItemGroup>
 
   <ItemGroup>

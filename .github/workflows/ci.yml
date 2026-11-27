@@ -225,7 +225,7 @@ jobs:
 
       - name: Build Docker images for Janus API and Web
         run: |
-          docker build -t janus-api:${{ github.sha }} src/Janus.Api
+          docker build -f src/Janus.Api/Dockerfile -t janus-api:${{ github.sha }} .
           docker build -t janus-web:${{ github.sha }} src/Janus.Web
 
       # Étape 1 : Génération des rapports SARIF pour audit complet (sévérités HIGH et CRITICAL).

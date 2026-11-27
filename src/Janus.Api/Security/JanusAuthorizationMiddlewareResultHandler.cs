@@ -1,3 +1,4 @@
+using Janus.Api.Observability;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;

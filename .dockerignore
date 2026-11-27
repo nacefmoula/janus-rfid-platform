@@ -8,3 +8,9 @@ __pycache__/
 *.pyc
 coverage/
 .sonarqube/
+# Lot 4 : le build de l'API utilise la racine comme contexte -> exclure les artefacts du front et les secrets locaux.
+**/node_modules/
+**/dist/
+**/.angular/
+monitoring/prometheus/metrics_token
+*.token

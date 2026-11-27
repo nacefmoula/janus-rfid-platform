@@ -1,3 +1,4 @@
+using Janus.Api.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 

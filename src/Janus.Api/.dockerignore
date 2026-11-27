@@ -1,9 +1,0 @@
-bin/
-obj/
-Dockerfile
-.dockerignore
-.git/
-.vs/
-.idea/
-*.user
-*.suo

@@ -1,0 +1,13 @@
+<Project>
+  <!-- Paramètres communs à tous les projets .NET de la solution (une seule source de vérité). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- Tout nouvel avertissement casse le build : la base de code est maintenue à 0 warning. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

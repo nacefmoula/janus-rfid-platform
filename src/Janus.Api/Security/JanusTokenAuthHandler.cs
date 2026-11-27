@@ -1,3 +1,4 @@
+using Janus.Api.Observability;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;

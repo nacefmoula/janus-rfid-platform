@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Janus.Api/Janus.Api.csproj" />
+    <Project Path="src/Janus.Domain/Janus.Domain.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Janus.Api.Tests/Janus.Api.Tests.csproj" />
