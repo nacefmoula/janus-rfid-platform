@@ -35,10 +35,12 @@ services:
     restart: "no"
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      # LOT-3D : "GSS Encryption Mode=Disable" évite que Npgsql tente de charger libgssapi_krb5 (absente de l'image
+      # aspnet) et journalise une fausse erreur à chaque connexion ; aucune authentification Kerberos n'est utilisée.
       Database__MigrateOnly: "true"
       Database__SkipMigration: "false"
-      ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_RUNTIME_USER:-janus_runtime};Password=${POSTGRES_RUNTIME_PASSWORD:-local-dev-runtime-password-change-me}
-      ConnectionStrings__MigrationDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_USER:-janus_app};Password=${POSTGRES_PASSWORD:-local-dev-db-password-change-me}
+      ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_RUNTIME_USER:-janus_runtime};Password=${POSTGRES_RUNTIME_PASSWORD:-local-dev-runtime-password-change-me};GSS Encryption Mode=Disable
+      ConnectionStrings__MigrationDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_USER:-janus_app};Password=${POSTGRES_PASSWORD:-local-dev-db-password-change-me};GSS Encryption Mode=Disable
     networks:
       - backend_net
     depends_on:
@@ -64,7 +66,7 @@ services:
       Database__LockTimeoutMs: ${DATABASE_LOCK_TIMEOUT_MS:-5000}
       Database__StatementTimeoutMs: ${DATABASE_STATEMENT_TIMEOUT_MS:-10000}
       Database__CommandTimeoutSeconds: ${DATABASE_COMMAND_TIMEOUT_SECONDS:-10}
-      ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_RUNTIME_USER:-janus_runtime};Password=${POSTGRES_RUNTIME_PASSWORD:-local-dev-runtime-password-change-me}
+      ConnectionStrings__JanusDb: Host=db;Port=5432;Database=${POSTGRES_DB:-janus_db};Username=${POSTGRES_RUNTIME_USER:-janus_runtime};Password=${POSTGRES_RUNTIME_PASSWORD:-local-dev-runtime-password-change-me};GSS Encryption Mode=Disable
       TerminalAuth__DemoToken: ${TERMINAL_DEMO_TOKEN:-dev-terminal-token-change-me}
       AdminAuth__DemoToken: ${ADMIN_DEMO_TOKEN:-dev-admin-token-change-me}
       MetricsAuth__ScrapeToken: ${METRICS_SCRAPE_TOKEN:-dev-metrics-scrape-token-change-me}

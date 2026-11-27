@@ -47,7 +47,7 @@ describe('CardsComponent', () => {
   };
 
   beforeEach(async () => {
-    apiSpy = jasmine.createSpyObj('JanusApiService', ['getCards', 'getDemoCards', 'getSimulatorCards', 'getCard', 'upsertCard']);
+    apiSpy = jasmine.createSpyObj('JanusApiService', ['getCards', 'getDemoCards', 'getSimulatorCards', 'getCard', 'upsertCard', 'creditCard']);
     apiSpy.getCards.and.callFake(fakeGetCards);
     apiSpy.getDemoCards.and.returnValue(of(mockCards));
     apiSpy.getSimulatorCards.and.returnValue(of(mockSimulatorCards));
@@ -232,48 +232,110 @@ describe('CardsComponent', () => {
     expect(component.targetCardUid).toBe('04A1B2C3D4E5F6');
   });
 
-  it('devrait soumettre la mise à jour d\'une carte avec motif d\'audit obligatoire en mode ADMIN', () => {
+  it('LOT-3D : une recharge passe par creditCard (delta idempotent) sans jamais réécrire le solde par PUT', () => {
     component.session.setAdminToken('valid-admin-token');
-    apiSpy.upsertCard.and.returnValue(of({
+    apiSpy.creditCard.and.returnValue(of({
       uid: '04A1B2C3D4E5F6',
-      status: 'Active',
-      label: 'Carte Usager Régulier',
-      balanceMillimes: 15000
+      operationId: 'op-1',
+      amountMillimes: 5000,
+      balanceAfterMillimes: 15000,
+      duplicate: false,
+      createdAt: '2026-11-27T10:00:00Z'
     }));
 
     component.openEditModal(mockCards[0]);
-    component.addAmountMillimes(5000); // 10000 + 5000 = 15000
+    component.addAmountMillimes(5000);
     component.editReason = 'Recharge guichet centrale 5 TND';
+    expect(component.projectedBalanceMillimes).toBe(15000);
 
     component.submitCardUpdate();
 
-    expect(apiSpy.upsertCard).toHaveBeenCalledWith('04A1B2C3D4E5F6', {
-      label: 'Carte Usager Régulier',
-      balanceMillimes: 15000,
-      status: 'Active',
-      reason: 'Recharge guichet centrale 5 TND',
-      expectedBalanceMillimes: 10000
+    expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+    expect(apiSpy.creditCard).toHaveBeenCalledWith('04A1B2C3D4E5F6', {
+      operationId: jasmine.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      amountMillimes: 5000,
+      reason: 'Recharge guichet centrale 5 TND'
     });
     expect(component.showEditModal()).toBeFalse();
   });
 
-  it('LOT-3B : sur 409 stale_balance, recharge le solde courant sans fermer la modale ni écraser le débit', () => {
+  it('LOT-3D : un changement de libellé/statut envoie un PUT sans solde, puis le crédit', () => {
     component.session.setAdminToken('valid-admin-token');
-    apiSpy.upsertCard.and.returnValue(throwError(() => ({
-      status: 409,
-      error: { error: 'stale_balance', currentBalanceMillimes: 8500 }
-    })));
+    apiSpy.upsertCard.and.returnValue(of({ uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Abonné Ligne 1', balanceMillimes: 10000 }));
+    apiSpy.creditCard.and.returnValue(of({
+      uid: '04A1B2C3D4E5F6', operationId: 'op-2', amountMillimes: 2000, balanceAfterMillimes: 12000, duplicate: false, createdAt: '2026-11-27T10:00:00Z'
+    }));
 
     component.openEditModal(mockCards[0]);
-    component.addAmountMillimes(5000);
-    component.editReason = 'Recharge guichet';
+    component.editLabel = 'Abonné Ligne 1';
+    component.editCreditMillimes = 2000;
+    component.editReason = 'Changement abonnement';
+    component.submitCardUpdate();
+
+    expect(apiSpy.upsertCard).toHaveBeenCalledWith('04A1B2C3D4E5F6', {
+      label: 'Abonné Ligne 1',
+      status: 'Active',
+      reason: 'Changement abonnement'
+    });
+    const putBody = apiSpy.upsertCard.calls.mostRecent().args[1];
+    expect(putBody.balanceMillimes).toBeUndefined();
+    expect(apiSpy.creditCard).toHaveBeenCalledTimes(1);
+    expect(component.showEditModal()).toBeFalse();
+  });
+
+  it('LOT-3D : un nouvel essai après erreur réseau réutilise le même operationId (aucun double crédit)', () => {
+    component.session.setAdminToken('valid-admin-token');
+    apiSpy.creditCard.and.returnValue(throwError(() => ({ status: 0 })));
+
+    component.openEditModal(mockCards[0]);
+    component.editCreditMillimes = 3000;
+    component.editReason = 'Recharge';
+    component.submitCardUpdate();
+    component.submitCardUpdate();
+
+    const firstId = apiSpy.creditCard.calls.argsFor(0)[1].operationId;
+    const secondId = apiSpy.creditCard.calls.argsFor(1)[1].operationId;
+    expect(secondId).toBe(firstId);
+
+    // Un montant différent est une nouvelle opération
+    component.editCreditMillimes = 4000;
+    component.submitCardUpdate();
+    expect(apiSpy.creditCard.calls.argsFor(2)[1].operationId).not.toBe(firstId);
+    expect(component.showEditModal()).toBeTrue();
+  });
+
+  it('LOT-3D : refuse côté interface de créditer une carte que l\'on révoque, et sans aucune modification', () => {
+    component.session.setAdminToken('valid-admin-token');
+    component.openEditModal(mockCards[0]);
+
+    component.editReason = 'Rien à faire';
+    component.submitCardUpdate();
+    expect(component.modalErrorMessage()).toContain('Aucune modification');
+
+    component.editStatus = 'Revoked';
+    component.editCreditMillimes = 5000;
+    component.submitCardUpdate();
+    expect(component.modalErrorMessage()).toContain('révoquée ne peut pas être créditée');
+
+    expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+    expect(apiSpy.creditCard).not.toHaveBeenCalled();
+  });
+
+  it('LOT-3D : signale un échec partiel (statut enregistré, crédit refusé card_revoked) sans fermer la modale', () => {
+    component.session.setAdminToken('valid-admin-token');
+    apiSpy.upsertCard.and.returnValue(of({ uid: '04A1B2C3D4E5F6', status: 'Active', label: 'Nouveau libellé', balanceMillimes: 10000 }));
+    apiSpy.creditCard.and.returnValue(throwError(() => ({ status: 409, error: { error: 'card_revoked' } })));
+
+    component.openEditModal(mockCards[0]);
+    component.editLabel = 'Nouveau libellé';
+    component.editCreditMillimes = 1000;
+    component.editReason = 'Recharge';
     component.submitCardUpdate();
 
     expect(component.isSubmitting()).toBeFalse();
     expect(component.showEditModal()).toBeTrue();
-    expect(component.editBalanceMillimes).toBe(8500);
-    expect(component.editExpectedBalanceMillimes).toBe(8500);
-    expect(component.modalErrorMessage()).toContain('Le solde de la carte a changé');
+    expect(component.modalErrorMessage()).toContain('Libellé / statut enregistrés, mais le crédit a échoué');
+    expect(component.modalErrorMessage()).toContain('révoquée');
   });
 
   it('6. clearTokens() vide les cartes chargées et ferme les modales de détail et d\'édition', () => {
@@ -336,6 +398,7 @@ describe('CardsComponent', () => {
     })));
 
     component.openEditModal(mockCards[0]);
+    component.editLabel = 'Libellé modifié';
     component.editReason = 'Test erreur 403';
     component.submitCardUpdate();
 
@@ -360,7 +423,8 @@ describe('CardsComponent', () => {
       expect(component.targetCardUid).toBe('04A1B2C3D4E5F6');
       expect(component.selectedCardForEdit()).toEqual(mockCards[0]);
       expect(component.editLabel).toBe('Carte Usager Régulier');
-      expect(component.editBalanceMillimes).toBe(10000);
+      expect(component.editCurrentBalanceMillimes).toBe(10000);
+      expect(component.editCreditMillimes).toBe(0);
       expect(component.editStatus).toBe('Active');
 
       const dialog: HTMLElement | null = fixture.nativeElement.querySelector('.modal-dialog[role="dialog"]');
@@ -426,18 +490,19 @@ describe('CardsComponent', () => {
       expect(component.showEditModal()).toBeFalse();
     });
 
-    it('refuse la soumission avec un solde négatif ou un motif vide et consigne l\'erreur dans la modale', () => {
+    it('refuse la soumission avec un montant négatif ou un motif vide et consigne l\'erreur dans la modale', () => {
       component.openEditModal(mockCards[0]);
 
-      // Solde négatif
-      component.editBalanceMillimes = -100;
+      // Montant à créditer négatif
+      component.editCreditMillimes = -100;
       component.editReason = 'Motif valide';
       component.submitCardUpdate();
       expect(apiSpy.upsertCard).not.toHaveBeenCalled();
       expect(component.modalErrorMessage()).toContain('négatif');
+      expect(apiSpy.creditCard).not.toHaveBeenCalled();
 
       // Motif vide
-      component.editBalanceMillimes = 5000;
+      component.editCreditMillimes = 5000;
       component.editReason = '   ';
       component.submitCardUpdate();
       expect(apiSpy.upsertCard).not.toHaveBeenCalled();
@@ -448,6 +513,7 @@ describe('CardsComponent', () => {
       apiSpy.upsertCard.and.returnValue(throwError(() => new Error('Erreur réseau')));
 
       component.openEditModal(mockCards[0]);
+      component.editLabel = 'Libellé modifié';
       component.editReason = 'Recharge 5 TND';
       component.submitCardUpdate();
 
@@ -463,11 +529,14 @@ describe('CardsComponent', () => {
         label: 'Nouveau Libellé',
         balanceMillimes: 20000
       }));
+      apiSpy.creditCard.and.returnValue(of({
+        uid: '04A1B2C3D4E5F6', operationId: 'op-3', amountMillimes: 10000, balanceAfterMillimes: 20000, duplicate: false, createdAt: '2026-11-27T10:00:00Z'
+      }));
       spyOn(component, 'loadCards').and.callThrough();
 
       component.openEditModal(mockCards[0]);
       component.editLabel = 'Nouveau Libellé';
-      component.editBalanceMillimes = 20000;
+      component.editCreditMillimes = 10000;
       component.editReason = 'Recharge 10 TND';
       component.submitCardUpdate();
 
@@ -637,26 +706,31 @@ describe('CardsComponent', () => {
   });
 
   describe('Couverture avancée des méthodes et branches conditionnelles', () => {
-    it('gère le rechargement rapide avec addAmountMillimes et refuse les soldes négatifs ou motifs vides', () => {
+    it('gère le rechargement rapide avec addAmountMillimes et refuse les montants négatifs ou motifs vides', () => {
       component.session.setAdminToken('valid-admin-token');
       component.openEditModal(mockCards[0]);
-      expect(component.editBalanceMillimes).toBe(10000);
+      expect(component.editCurrentBalanceMillimes).toBe(10000);
+      expect(component.editCreditMillimes).toBe(0);
 
       component.addAmountMillimes(5000);
-      expect(component.editBalanceMillimes).toBe(15000);
+      expect(component.editCreditMillimes).toBe(5000);
+      expect(component.projectedBalanceMillimes).toBe(15000);
 
       component.addAmountMillimes(10000);
-      expect(component.editBalanceMillimes).toBe(25000);
+      expect(component.editCreditMillimes).toBe(15000);
+      expect(component.projectedBalanceMillimes).toBe(25000);
+      // Le solde courant affiché n'est jamais modifié localement
+      expect(component.editCurrentBalanceMillimes).toBe(10000);
 
-      // Rejet solde négatif
-      component.editBalanceMillimes = -500;
-      component.editReason = 'Test solde négatif';
+      // Rejet montant négatif
+      component.editCreditMillimes = -500;
+      component.editReason = 'Test montant négatif';
       component.submitCardUpdate();
-      expect(component.modalErrorMessage()).toContain('Le solde d\'une carte ne peut pas être négatif');
-      expect(apiSpy.upsertCard).not.toHaveBeenCalled();
+      expect(component.modalErrorMessage()).toContain('jamais négatif');
+      expect(apiSpy.creditCard).not.toHaveBeenCalled();
 
       // Rejet motif vide
-      component.editBalanceMillimes = 10000;
+      component.editCreditMillimes = 10000;
       component.editReason = '   ';
       component.submitCardUpdate();
       expect(component.modalErrorMessage()).toContain('Un motif explicite est obligatoire');

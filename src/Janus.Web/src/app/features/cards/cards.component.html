@@ -323,7 +323,7 @@
             </svg>
             <div>
               <strong>Règle de gouvernance &amp; Traçabilité :</strong>
-              <span> Cette action consigne un ajustement administratif de solde dans le journal d'audit (<code>CardAuditLogs</code>), distinct du registre billettique de transport (<code>FareTransactions</code>).</span>
+              <span> Chaque recharge est un crédit idempotent inscrit au journal comptable (<code>WalletLedgerEntries</code>) et au journal d'audit (<code>CardAuditLogs</code>) ; le solde n'est jamais écrasé par l'interface.</span>
             </div>
           </div>
 
@@ -352,19 +352,27 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="cardBalanceInput">Nouveau solde (en millimes) :</label>
+            <span class="form-label">Solde actuel (lecture seule)</span>
+            <div class="balance-input-row">
+              <strong class="balance-preview current-balance">{{ editCurrentBalanceMillimes | millimes }}</strong>
+            </div>
+            <span class="field-hint">Le solde n'est jamais saisi directement : une recharge est un crédit idempotent inscrit au journal comptable.</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cardCreditInput">Montant à créditer (en millimes) :</label>
             <div class="balance-input-row">
               <input
-                id="cardBalanceInput"
+                id="cardCreditInput"
                 type="number"
                 class="form-input"
                 min="0"
                 step="500"
-                [(ngModel)]="editBalanceMillimes"
+                [(ngModel)]="editCreditMillimes"
               />
-              <span class="balance-preview">{{ editBalanceMillimes | millimes }}</span>
+              <span class="balance-preview">Nouveau solde estimé : {{ projectedBalanceMillimes | millimes }}</span>
             </div>
-            <!-- Raccourcis de recharge rapide -->
+            <!-- Raccourcis de recharge rapide (incrémentent le montant à créditer) -->
             <div class="quick-recharge-btns">
               <span class="quick-title">Recharge rapide :</span>
               <button type="button" class="quick-btn" (click)="addAmountMillimes(5000)" [disabled]="isSubmitting()">+ 5,000 TND</button>
@@ -406,7 +414,7 @@
             type="button"
             class="btn btn-primary"
             (click)="submitCardUpdate()"
-            [disabled]="isSubmitting() || !editReason.trim() || editBalanceMillimes < 0">
+            [disabled]="isSubmitting() || !editReason.trim() || editCreditMillimes < 0">
             @if (isSubmitting()) {
               <span>Enregistrement...</span>
             } @else {

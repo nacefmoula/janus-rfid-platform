@@ -32,7 +32,11 @@ export interface CardDetail {
 }
 
 export interface CardUpsertRequest {
-  balanceMillimes: number;
+  /**
+   * Solde absolu : à fournir à la création. Sur une carte existante, omis = solde inchangé ;
+   * une correction absolue exige `expectedBalanceMillimes` (428 sinon). Les recharges passent par `creditCard`.
+   */
+  balanceMillimes?: number;
   status?: CardStatus | string;
   label?: string;
   reason?: string;
@@ -41,6 +45,22 @@ export interface CardUpsertRequest {
    * Le serveur répond 409 `stale_balance` si le solde a changé depuis (ex. débit d'un terminal).
    */
   expectedBalanceMillimes?: number;
+}
+
+/** Crédit idempotent (LOT-3B/3D) : l'operationId est réutilisé tel quel en cas de nouvel essai. */
+export interface CardCreditRequest {
+  operationId: string;
+  amountMillimes: number;
+  reason: string;
+}
+
+export interface CardCreditResult {
+  uid: string;
+  operationId: string;
+  amountMillimes: number;
+  balanceAfterMillimes: number;
+  duplicate: boolean;
+  createdAt: string;
 }
 
 export interface CardAuditLog {

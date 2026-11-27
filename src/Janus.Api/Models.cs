@@ -93,11 +93,17 @@ public sealed class WalletLedgerEntry {
     public DateTimeOffset CreatedAt { get; set; }
 }
 public sealed record ValidationRequest(Guid EventId, string CardUid, DateTimeOffset? OccurredAt, string EventType);
-/// <param name="ExpectedBalanceMillimes">
-/// Garde de concurrence optimiste : si fournie pour une carte existante, la mise à jour est refusée (409 stale_balance)
-/// lorsque le solde courant diffère, ce qui empêche d'écraser un débit survenu depuis la lecture du client.
+/// <param name="BalanceMillimes">
+/// Solde absolu : obligatoire à la création (défaut 0), facultatif sur une carte existante (absent = solde inchangé).
+/// Une modification absolue du solde d'une carte existante est une correction exceptionnelle : les recharges passent par
+/// POST /api/cards/{uid}/credits.
 /// </param>
-public sealed record CardUpsertRequest(int BalanceMillimes, string? Status, string? Label, string? Reason = null, int? ExpectedBalanceMillimes = null);
+/// <param name="ExpectedBalanceMillimes">
+/// Garde de concurrence optimiste, OBLIGATOIRE pour toute modification absolue du solde d'une carte existante
+/// (428 expected_balance_required sinon). Si le solde courant diffère, la mise à jour est refusée (409 stale_balance),
+/// ce qui empêche d'écraser un débit survenu depuis la lecture du client.
+/// </param>
+public sealed record CardUpsertRequest(int? BalanceMillimes, string? Status, string? Label, string? Reason = null, int? ExpectedBalanceMillimes = null);
 /// <summary>Crédit idempotent : OperationId est généré par le client et réutilisé tel quel en cas de nouvel essai.</summary>
 public sealed record CardCreditRequest(Guid OperationId, int AmountMillimes, string? Reason);
 public sealed record LedgerEntryDto(
