@@ -24,7 +24,7 @@
     "zone.js": "~0.15.0"
   },
   "devDependencies": {
-    "@angular-devkit/build-angular": "^19.2.27",
+    "@angular/build": "^19.2.27",
     "@angular/cli": "^19.2.27",
     "@types/jasmine": "~5.1.0",
     "jasmine-core": "~5.6.0",
@@ -39,17 +39,11 @@
     "piscina": "4.9.4",
     "tar": "7.5.22",
     "postcss": "^8.5.30",
-    "webpack-dev-middleware": "^7.4.6",
-    "webpack-dev-server": "^5.2.6",
-    "http-proxy-middleware": "^3.0.7",
     "vite": "^6.4.5",
     "follow-redirects": "^1.16.2",
     "fast-uri": "^3.1.9",
     "body-parser": "^1.20.9",
     "@angular/build": {
-      "esbuild": "^0.28.1"
-    },
-    "@angular-devkit/build-angular": {
       "esbuild": "^0.28.1"
     },
     "@babel/core": "^7.29.6"
