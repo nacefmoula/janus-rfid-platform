@@ -648,9 +648,25 @@ public class OrganizationsAndTerminalsTests : IAsyncLifetime
     public async Task CRD02_TRM12_Production_RequiresOrganizationAtCardCreation_AndIgnoresStaticTerminalTokens()
     {
         var role = "janus_prodtest_" + Guid.NewGuid().ToString("N")[..8];
-        var password = "Pr0dTest-" + Guid.NewGuid().ToString("N");
-        // Rôle de connexion dédié (mot de passe fort, membre de janus_runtime) : la garde de production refuse les mots de passe de dev.
-        await ScalarAsync(_factory.MigrationConnectionString, $"CREATE ROLE {role} LOGIN PASSWORD '{password}' INHERIT IN ROLE janus_runtime");
+        var secret = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+        // Rôle de connexion dédié (secret aléatoire fort, membre de janus_runtime) : la garde de production refuse les mots de passe
+        // de dev. Le secret est transmis en paramètre SQL, jamais concaténé (même pratique que PostgresLeastPrivilegeProvisioner).
+        await using (var conn = new NpgsqlConnection(_factory.MigrationConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            await using (var set = new NpgsqlCommand("SELECT set_config('janus.test_role_secret', @secret, true)", conn, tx))
+            {
+                set.Parameters.AddWithValue("secret", secret);
+                await set.ExecuteScalarAsync();
+            }
+            await using (var create = new NpgsqlCommand(
+                $"DO $$ BEGIN EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L INHERIT IN ROLE janus_runtime', '{role}', current_setting('janus.test_role_secret')); END $$", conn, tx))
+            {
+                await create.ExecuteNonQueryAsync();
+            }
+            await tx.CommitAsync();
+        }
         var adminToken = "prod-admin-" + Guid.NewGuid().ToString("N");
         var staticTerminalToken = "prod-static-terminal-" + Guid.NewGuid().ToString("N");
         try
@@ -661,7 +677,7 @@ public class OrganizationsAndTerminalsTests : IAsyncLifetime
                 builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Database:SkipMigration"] = "true",
-                    ["ConnectionStrings:JanusDb"] = new NpgsqlConnectionStringBuilder(_factory.RuntimeConnectionString) { Username = role, Password = password }.ConnectionString,
+                    ["ConnectionStrings:JanusDb"] = new NpgsqlConnectionStringBuilder(_factory.RuntimeConnectionString) { Username = role, Password = secret }.ConnectionString,
                     ["ConnectionStrings:MigrationDb"] = "",
                     ["AdminAuth:DemoToken"] = adminToken,
                     ["MetricsAuth:ScrapeToken"] = "prod-scrape-" + Guid.NewGuid().ToString("N"),

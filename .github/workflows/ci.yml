@@ -408,6 +408,7 @@ jobs:
             /d:sonar.scanner.scanAll=true \
             /d:sonar.exclusions="**/node_modules/**,**/dist/**,**/.angular/**,**/bin/**,**/obj/**" \
             /d:sonar.coverage.exclusions="tests/**,**/*.spec.ts,**/Program.cs,**/Migrations/**" \
+            /d:sonar.cpd.exclusions="**/Migrations/**" \
             /d:sonar.qualitygate.wait=true
 
       - name: Restore NuGet dependencies

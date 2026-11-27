@@ -41,7 +41,8 @@ public static class TerminalEndpoints
         ClaimsPrincipal user,
         JanusDbContext db,
         IConfiguration configuration,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
     {
         var orgCode = OrganizationCodes.Normalize(organizationCode);
         if (!OrganizationCodes.IsValidOrganizationCode(orgCode))
@@ -60,7 +61,7 @@ public static class TerminalEndpoints
 
         return await InTransactionAsync(db, configuration, async () =>
         {
-            var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(o => o.Code == orgCode);
+            var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(o => o.Code == orgCode, cancellationToken);
             if (organization is null)
                 return Results.NotFound(new { error = "organization_not_found" });
             if (organization.Status == OrganizationStatus.Suspended)
@@ -80,7 +81,7 @@ public static class TerminalEndpoints
                 CreatedBy = actor
             };
             db.Terminals.Add(terminal);
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
 
             db.TerminalAuditLogs.Add(new TerminalAuditLog
             {
@@ -92,25 +93,25 @@ public static class TerminalEndpoints
                 Actor = actor,
                 CreatedAt = now
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
 
             // Le jeton n'apparaît que dans cette réponse : interdiction de mise en cache par tout intermédiaire.
             http.Response.Headers.CacheControl = "no-store";
             http.Response.Headers.Pragma = "no-cache";
             return Results.Created($"/api/organizations/{organization.Code}/terminals",
                 new TerminalEnrollmentResult(terminal.Code, organization.Code, terminal.Label, terminal.Status.ToString(), terminal.ExpiresAt, terminal.CreatedAt, token));
-        }, uniqueViolation: constraint => constraint == "IX_Terminals_Code"
+        }, cancellationToken, uniqueViolation: constraint => constraint == "IX_Terminals_Code"
             ? Results.Conflict(new { error = "terminal_code_taken", message = "A terminal with this code already exists on the platform." })
             : null);
     }
 
-    private static async Task<IResult> ListAsync(string organizationCode, JanusDbContext db)
+    private static async Task<IResult> ListAsync(string organizationCode, JanusDbContext db, CancellationToken cancellationToken)
     {
         var orgCode = OrganizationCodes.Normalize(organizationCode);
         if (!OrganizationCodes.IsValidOrganizationCode(orgCode))
             return Results.BadRequest(new { error = "invalid_organization_code", message = "Invalid organization code." });
 
-        var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(o => o.Code == orgCode);
+        var organization = await db.Organizations.AsNoTracking().SingleOrDefaultAsync(o => o.Code == orgCode, cancellationToken);
         if (organization is null)
             return Results.NotFound(new { error = "organization_not_found" });
 
@@ -118,7 +119,7 @@ public static class TerminalEndpoints
             .Where(t => t.OrganizationId == organization.Id)
             .OrderBy(t => t.Code)
             .Select(t => new TerminalDto(t.Code, organization.Code, t.Label, t.Status.ToString(), t.ExpiresAt, t.CreatedAt, t.CreatedBy, t.RevokedAt, t.RevokedBy, t.RevocationReason))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
         return Results.Ok(terminals);
     }
 
@@ -128,7 +129,8 @@ public static class TerminalEndpoints
         ClaimsPrincipal user,
         JanusDbContext db,
         IConfiguration configuration,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
     {
         var code = OrganizationCodes.Normalize(terminalCode);
         if (!OrganizationCodes.IsValidTerminalCode(code))
@@ -143,7 +145,7 @@ public static class TerminalEndpoints
         return await InTransactionAsync(db, configuration, async () =>
         {
             // Verrou de ligne : deux révocations concurrentes sont sérialisées, la seconde voit l'état révoqué.
-            var terminal = await db.Terminals.FromSqlInterpolated($"SELECT * FROM \"Terminals\" WHERE \"Code\" = {code} FOR UPDATE").SingleOrDefaultAsync();
+            var terminal = await db.Terminals.FromSqlInterpolated($"SELECT * FROM \"Terminals\" WHERE \"Code\" = {code} FOR UPDATE").SingleOrDefaultAsync(cancellationToken);
             if (terminal is null)
                 return Results.NotFound(new { error = "terminal_not_found" });
             if (terminal.Status == TerminalStatus.Revoked)
@@ -161,10 +163,10 @@ public static class TerminalEndpoints
                 Actor = actor,
                 CreatedAt = now
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
 
             return Results.Ok(new { code = terminal.Code, status = terminal.Status.ToString(), revokedAt = terminal.RevokedAt, revokedBy = terminal.RevokedBy, reason = terminal.RevocationReason });
-        });
+        }, cancellationToken);
     }
 
     private static string ActorOf(ClaimsPrincipal user) =>
@@ -173,36 +175,38 @@ public static class TerminalEndpoints
     /// <summary>
     /// Transaction courte avec timeouts bornés. Le résultat n'est engagé que si l'action réussit ; un 4xx métier est renvoyé
     /// après ROLLBACK. 23505 → réponse fournie par <paramref name="uniqueViolation"/> ; 55P03 / 57014 → 503 sans nouvelle tentative.
+    /// L'annulation de la requête (client déconnecté) interrompt le travail avant COMMIT ; le COMMIT lui-même n'est jamais annulé.
     /// </summary>
     private static async Task<IResult> InTransactionAsync(
         JanusDbContext db,
         IConfiguration configuration,
         Func<Task<IResult>> action,
+        CancellationToken cancellationToken,
         Func<string?, IResult?>? uniqueViolation = null)
     {
         var lockTimeoutMs = ConfigurationReader.GetClampedInt(configuration, "Database:LockTimeoutMs", "DATABASE_LOCK_TIMEOUT_MS", 5000, 50, 60000);
         var statementTimeoutMs = ConfigurationReader.GetClampedInt(configuration, "Database:StatementTimeoutMs", "DATABASE_STATEMENT_TIMEOUT_MS", 10000, 100, 120000);
 
-        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         try
         {
             await PostgresTransactions.ApplyTimeoutsAsync(db, lockTimeoutMs, statementTimeoutMs);
             var result = await action();
             if (result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 })
-                await tx.CommitAsync();
+                await tx.CommitAsync(CancellationToken.None);
             else
-                await tx.RollbackAsync();
+                await tx.RollbackAsync(CancellationToken.None);
             return result;
         }
         catch (DbUpdateException ex) when (PostgresErrors.TryGetSqlState(ex) == PostgresErrors.UniqueViolation
                                            && uniqueViolation?.Invoke((ex.InnerException as PostgresException)?.ConstraintName) is { } conflict)
         {
-            await tx.RollbackAsync();
+            await tx.RollbackAsync(CancellationToken.None);
             return conflict;
         }
         catch (Exception ex) when (PostgresErrors.TryGetSqlState(ex) is PostgresErrors.LockNotAvailable or PostgresErrors.QueryCanceled)
         {
-            await tx.RollbackAsync();
+            await tx.RollbackAsync(CancellationToken.None);
             return Results.Json(new { error = "database_busy", message = "The terminal record is temporarily locked. Please retry." }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }

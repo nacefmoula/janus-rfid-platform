@@ -677,7 +677,11 @@ public class SecurityHardeningTests : IAsyncLifetime
                     config.AddInMemoryCollection(new Dictionary<string, string?>
                     {
                         ["Database:SkipMigration"] = "true",
-                        ["ConnectionStrings:JanusDb"] = $"Host=localhost;Port=5433;Database=janus_db;Username=janus_runtime;Password=prod-rt-{Guid.NewGuid():N}",
+                        ["ConnectionStrings:JanusDb"] = new Npgsql.NpgsqlConnectionStringBuilder
+                        {
+                            Host = "localhost", Port = 5433, Database = "janus_db", Username = "janus_runtime",
+                            Password = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24))
+                        }.ConnectionString,
                         ["ConnectionStrings:MigrationDb"] = "",
                         ["TerminalAuth:DemoToken"] = "",
                         ["TerminalAuth:Terminal2Token"] = "dev-terminal-02-token-change-me",
