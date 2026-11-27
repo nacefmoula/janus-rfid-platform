@@ -35,7 +35,7 @@ public static class DemoDataSeeder
                 EntryType = LedgerEntryTypes.OpeningBalance,
                 AmountMillimes = card.BalanceMillimes,
                 BalanceAfterMillimes = card.BalanceMillimes,
-                IdempotencyKey = $"opening:seed:{card.Uid}",
+                IdempotencyKey = LedgerIdempotencyKeys.SeedOpening(card.Uid),
                 Actor = "SEED",
                 Reason = "Carte de démonstration (Development)",
                 CreatedAt = DateTimeOffset.UtcNow

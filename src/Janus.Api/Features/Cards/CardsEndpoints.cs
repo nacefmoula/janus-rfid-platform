@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Janus.Api.Common;
-using Janus.Api.Configuration;
 using Janus.Api.Infrastructure.Persistence;
 using Janus.Api.Observability;
 using Janus.Api.Security;
@@ -220,151 +219,169 @@ public static class CardsEndpoints
             });
         }).RequireAuthorization(JanusPolicies.AuditRead).RequireRateLimiting(JanusRateLimitPolicies.Admin);
 
-        endpoints.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, ClaimsPrincipal user, IConfiguration config, IServiceScopeFactory scopeFactory, TimeProvider timeProvider, ILogger<Program> logger) => {
-            if (string.IsNullOrWhiteSpace(uid) || uid.Length > JanusSchemaLimits.CardUidMaxLength)
-                return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
+        endpoints.MapPut("/api/cards/{uid}", UpsertCardAsync)
+            .RequireAuthorization(JanusPolicies.AdminOnly)
+            .RequireRateLimiting(JanusRateLimitPolicies.Admin);
 
-            if (request.BalanceMillimes is < 0)
-                return Results.BadRequest(new { error = "invalid_balance", message = "Balance cannot be negative." });
+        return endpoints;
+    }
 
-            // LOT-3A / INP-01 : bornes alignées sur le schéma (Cards.Label varchar(120), CardAuditLogs.Reason varchar(256)).
-            // Sans ce contrôle, PostgreSQL lève 22001 (string_data_right_truncation) et l'API répond 500 au lieu de 400.
-            if (request.Label is not null && request.Label.Length > JanusSchemaLimits.CardLabelMaxLength)
-                return Results.BadRequest(new { error = "invalid_label", message = $"Label must not exceed {JanusSchemaLimits.CardLabelMaxLength} characters." });
+    private static readonly FinancialOperationMessages UpsertMessages = new(
+        Busy: "The card record is temporarily locked by a concurrent operation. Please retry.",
+        TransientConflictPersisted: "Temporary transactional conflict persisted after retries. Please retry.",
+        RetriesExhausted: "Unable to complete card update after bounded retries.");
 
-            if (request.Reason is not null && request.Reason.Trim().Length > JanusSchemaLimits.AuditReasonMaxLength)
-                return Results.BadRequest(new { error = "invalid_reason", message = $"Reason must not exceed {JanusSchemaLimits.AuditReasonMaxLength} characters." });
+    private static async Task<IResult> UpsertCardAsync(
+        string uid,
+        CardUpsertRequest request,
+        ClaimsPrincipal user,
+        FinancialTransactionRunner runner,
+        TimeProvider timeProvider,
+        ILoggerFactory loggerFactory)
+    {
+        var logger = loggerFactory.CreateLogger(typeof(CardsEndpoints));
 
-            // Validation stricte du statut si fourni (uniquement Active ou Revoked, insensible à la casse)
-            CardStatus? requestedStatus = null;
-            if (!string.IsNullOrWhiteSpace(request.Status)) {
-                var s = request.Status.Trim();
-                if (s.Equals("Active", StringComparison.OrdinalIgnoreCase)) {
-                    requestedStatus = CardStatus.Active;
-                } else if (s.Equals("Revoked", StringComparison.OrdinalIgnoreCase)) {
-                    requestedStatus = CardStatus.Revoked;
-                } else {
-                    return Results.BadRequest(new { error = "invalid_status", message = "Status must be 'Active' or 'Revoked'." });
-                }
-            }
+        if (string.IsNullOrWhiteSpace(uid) || uid.Length > JanusSchemaLimits.CardUidMaxLength)
+            return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
 
-            var normalized = uid.Trim().ToUpperInvariant();
-            var actor = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "ADMIN";
-            var lockTimeoutMs = ConfigurationReader.GetClampedInt(config, "Database:LockTimeoutMs", "DATABASE_LOCK_TIMEOUT_MS", 5000, 50, 60000);
-            var statementTimeoutMs = ConfigurationReader.GetClampedInt(config, "Database:StatementTimeoutMs", "DATABASE_STATEMENT_TIMEOUT_MS", 10000, 100, 120000);
-            const int maxTransientRetries = 2;
+        if (request.BalanceMillimes is < 0)
+            return Results.BadRequest(new { error = "invalid_balance", message = "Balance cannot be negative." });
 
-            for (int attempt = 0; attempt <= maxTransientRetries; attempt++)
+        // LOT-3A / INP-01 : bornes alignées sur le schéma (Cards.Label varchar(120), CardAuditLogs.Reason varchar(256)).
+        // Sans ce contrôle, PostgreSQL lève 22001 (string_data_right_truncation) et l'API répond 500 au lieu de 400.
+        if (request.Label is not null && request.Label.Length > JanusSchemaLimits.CardLabelMaxLength)
+            return Results.BadRequest(new { error = "invalid_label", message = $"Label must not exceed {JanusSchemaLimits.CardLabelMaxLength} characters." });
+
+        if (request.Reason is not null && request.Reason.Trim().Length > JanusSchemaLimits.AuditReasonMaxLength)
+            return Results.BadRequest(new { error = "invalid_reason", message = $"Reason must not exceed {JanusSchemaLimits.AuditReasonMaxLength} characters." });
+
+        // Validation stricte du statut si fourni (uniquement Active ou Revoked, insensible à la casse)
+        CardStatus? requestedStatus = null;
+        if (!string.IsNullOrWhiteSpace(request.Status))
+        {
+            var s = request.Status.Trim();
+            if (s.Equals("Active", StringComparison.OrdinalIgnoreCase))
+                requestedStatus = CardStatus.Active;
+            else if (s.Equals("Revoked", StringComparison.OrdinalIgnoreCase))
+                requestedStatus = CardStatus.Revoked;
+            else
+                return Results.BadRequest(new { error = "invalid_status", message = "Status must be 'Active' or 'Revoked'." });
+        }
+
+        var normalized = uid.Trim().ToUpperInvariant();
+        var actor = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "ADMIN";
+
+        return await runner.ExecuteAsync(new FinancialOperation
+        {
+            Name = "card_upsert",
+            CorrelationKey = $"card={normalized}",
+            Messages = UpsertMessages,
+            ExecuteAsync = async (db, attempt) =>
             {
-                await using var attemptScope = scopeFactory.CreateAsyncScope();
-                var db = attemptScope.ServiceProvider.GetRequiredService<JanusDbContext>();
-                await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
-                bool wasCreatingNewCard = false;
+                var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {normalized} FOR UPDATE").SingleOrDefaultAsync();
 
-                try {
-                    await PostgresTransactions.ApplyTimeoutsAsync(db, lockTimeoutMs, statementTimeoutMs);
+                // P1-3 / Lot 2C : si deux PUT concurrents créent la même nouvelle carte (23505 sur IX_Cards_Uid), rejouer une unique fois
+                // la transaction complète afin de verrouiller (SELECT ... FOR UPDATE) la carte créée par le concurrent et d'enregistrer
+                // la seconde opération comme ADMIN_CARD_UPDATED avec PreviousBalance exact.
+                attempt.RetryOnceOnUniqueViolation = card is null;
 
-                    var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {normalized} FOR UPDATE").SingleOrDefaultAsync();
-                    wasCreatingNewCard = card is null;
+                // LOT-3D / FIN-10 : une modification absolue du solde d'une carte existante exige la garde optimiste.
+                // Sans elle, le serveur ne peut pas distinguer une correction volontaire d'un écrasement accidentel (lecture périmée).
+                if (card is not null && request.BalanceMillimes is int requestedBalance && requestedBalance != card.BalanceMillimes && request.ExpectedBalanceMillimes is null)
+                {
+                    JanusMetrics.RecordDbTransactionEvent("card_upsert", "expected_balance_missing");
+                    return FinancialStep.Abort(Results.Json(new {
+                        error = "expected_balance_required",
+                        message = "Changing the balance of an existing card requires expectedBalanceMillimes. Use POST /api/cards/{uid}/credits for top-ups.",
+                        currentBalanceMillimes = card.BalanceMillimes
+                    }, statusCode: StatusCodes.Status428PreconditionRequired));
+                }
 
-                    // LOT-3D / FIN-10 : une modification absolue du solde d'une carte existante exige la garde optimiste.
-                    // Sans elle, le serveur ne peut pas distinguer une correction volontaire d'un écrasement accidentel (lecture périmée).
-                    if (card is not null && request.BalanceMillimes is int requestedBalance && requestedBalance != card.BalanceMillimes && request.ExpectedBalanceMillimes is null)
-                    {
-                        await tx.RollbackAsync(CancellationToken.None);
-                        JanusMetrics.RecordDbTransactionEvent("card_upsert", "expected_balance_missing");
-                        return Results.Json(new {
-                            error = "expected_balance_required",
-                            message = "Changing the balance of an existing card requires expectedBalanceMillimes. Use POST /api/cards/{uid}/credits for top-ups.",
-                            currentBalanceMillimes = card.BalanceMillimes
-                        }, statusCode: StatusCodes.Status428PreconditionRequired);
-                    }
+                // LOT-3B / FIN-08 : garde de concurrence optimiste. Le client déclare le solde sur lequel il s'est basé ;
+                // s'il a changé depuis (débit d'un terminal, autre admin), on refuse au lieu d'écraser silencieusement le mouvement.
+                if (card is not null && request.ExpectedBalanceMillimes is int expectedBalance && expectedBalance != card.BalanceMillimes)
+                {
+                    JanusMetrics.RecordDbTransactionEvent("card_upsert", "stale_balance_rejected");
+                    return FinancialStep.Abort(Results.Json(new {
+                        error = "stale_balance",
+                        message = "The card balance changed since it was read. Reload the card and retry.",
+                        currentBalanceMillimes = card.BalanceMillimes
+                    }, statusCode: StatusCodes.Status409Conflict));
+                }
 
-                    // LOT-3B / FIN-08 : garde de concurrence optimiste. Le client déclare le solde sur lequel il s'est basé ;
-                    // s'il a changé depuis (débit d'un terminal, autre admin), on refuse au lieu d'écraser silencieusement le mouvement.
-                    if (card is not null && request.ExpectedBalanceMillimes is int expectedBalance && expectedBalance != card.BalanceMillimes)
-                    {
-                        await tx.RollbackAsync(CancellationToken.None);
-                        JanusMetrics.RecordDbTransactionEvent("card_upsert", "stale_balance_rejected");
-                        return Results.Json(new {
-                            error = "stale_balance",
-                            message = "The card balance changed since it was read. Reload the card and retry.",
-                            currentBalanceMillimes = card.BalanceMillimes
-                        }, statusCode: StatusCodes.Status409Conflict);
-                    }
-                    var prevBalance = card?.BalanceMillimes;
-                    var prevStatus = card?.Status.ToString();
-                    var action = card is null ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED";
+                var prevBalance = card?.BalanceMillimes;
+                var prevStatus = card?.Status.ToString();
+                var action = card is null ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED";
 
-                    // Détermination du statut effectif :
-                    // - Pour une nouvelle carte : Active par défaut si aucun statut n'est fourni.
-                    // - Pour une carte existante : conserve son statut actuel si aucun statut n'est fourni.
-                    CardStatus targetStatus = card is null
-                        ? (requestedStatus ?? CardStatus.Active)
-                        : (requestedStatus ?? card.Status);
+                // Statut effectif : Active par défaut à la création, inchangé sur une carte existante si non fourni.
+                CardStatus targetStatus = card is null
+                    ? (requestedStatus ?? CardStatus.Active)
+                    : (requestedStatus ?? card.Status);
 
-                    // Motif d'audit distinct du libellé de la carte
-                    var auditReason = !string.IsNullOrWhiteSpace(request.Reason)
-                        ? request.Reason.Trim()
-                        : (card is null ? "Initial card provisioning" : "Admin balance/status update");
+                // Motif d'audit distinct du libellé de la carte
+                var auditReason = !string.IsNullOrWhiteSpace(request.Reason)
+                    ? request.Reason.Trim()
+                    : (card is null ? "Initial card provisioning" : "Admin balance/status update");
 
-                    var movementAt = timeProvider.GetUtcNow();
-                    int balanceDelta;
-                    string? ledgerEntryType;
+                var movementAt = timeProvider.GetUtcNow();
+                int balanceDelta;
+                string ledgerEntryType;
 
-                    if (card is null) {
-                        var openingBalance = request.BalanceMillimes ?? 0;
-                        card = new TransitCard {
-                            Uid = normalized,
-                            Status = targetStatus,
-                            Label = request.Label ?? $"Card {normalized}",
-                            BalanceMillimes = openingBalance
-                        };
-                        db.Cards.Add(card);
-                        balanceDelta = openingBalance;
-                        ledgerEntryType = LedgerEntryTypes.OpeningBalance;
-                    } else {
-                        var newBalance = request.BalanceMillimes ?? card.BalanceMillimes;
-                        balanceDelta = newBalance - card.BalanceMillimes;
-                        ledgerEntryType = LedgerEntryTypes.AdminAdjustment;
-                        card.BalanceMillimes = newBalance;
-                        card.Status = targetStatus;
-                        if (!string.IsNullOrEmpty(request.Label))
-                            card.Label = request.Label;
-                    }
-
-                    // LOT-3B / FIN-06 : tout mouvement de solde est inscrit au journal comptable (append-only).
-                    if (balanceDelta != 0) {
-                        db.WalletLedgerEntries.Add(new WalletLedgerEntry {
-                            Card = card,
-                            CardUid = normalized,
-                            EntryType = ledgerEntryType,
-                            AmountMillimes = balanceDelta,
-                            BalanceAfterMillimes = card.BalanceMillimes,
-                            IdempotencyKey = $"admin-set:{Guid.NewGuid():N}",
-                            Actor = actor,
-                            Reason = auditReason,
-                            CreatedAt = movementAt
-                        });
-                    }
-
-                    // Traçabilité d'audit avec identité réelle persistée (SEC-06)
-                    var audit = new CardAuditLog {
-                        CardUid = normalized,
-                        Action = action,
-                        PreviousBalanceMillimes = prevBalance,
-                        NewBalanceMillimes = card.BalanceMillimes,
-                        PreviousStatus = prevStatus,
-                        NewStatus = card.Status.ToString(),
-                        Reason = auditReason,
-                        Actor = actor,
-                        CreatedAt = movementAt
+                if (card is null)
+                {
+                    var openingBalance = request.BalanceMillimes ?? 0;
+                    card = new TransitCard {
+                        Uid = normalized,
+                        Status = targetStatus,
+                        Label = request.Label ?? $"Card {normalized}",
+                        BalanceMillimes = openingBalance
                     };
-                    db.CardAuditLogs.Add(audit);
+                    db.Cards.Add(card);
+                    balanceDelta = openingBalance;
+                    ledgerEntryType = LedgerEntryTypes.OpeningBalance;
+                }
+                else
+                {
+                    var newBalance = request.BalanceMillimes ?? card.BalanceMillimes;
+                    balanceDelta = newBalance - card.BalanceMillimes;
+                    ledgerEntryType = LedgerEntryTypes.AdminAdjustment;
+                    card.BalanceMillimes = newBalance;
+                    card.Status = targetStatus;
+                    if (!string.IsNullOrEmpty(request.Label))
+                        card.Label = request.Label;
+                }
 
-                    await db.SaveChangesAsync();
-                    await tx.CommitAsync(CancellationToken.None);
+                // LOT-3B / FIN-06 : tout mouvement de solde est inscrit au journal comptable (append-only).
+                if (balanceDelta != 0)
+                {
+                    db.WalletLedgerEntries.Add(new WalletLedgerEntry {
+                        Card = card,
+                        CardUid = normalized,
+                        EntryType = ledgerEntryType,
+                        AmountMillimes = balanceDelta,
+                        BalanceAfterMillimes = card.BalanceMillimes,
+                        IdempotencyKey = LedgerIdempotencyKeys.AdminSet(Guid.NewGuid()),
+                        Actor = actor,
+                        Reason = auditReason,
+                        CreatedAt = movementAt
+                    });
+                }
 
+                // Traçabilité d'audit avec identité réelle persistée (SEC-06)
+                db.CardAuditLogs.Add(new CardAuditLog {
+                    CardUid = normalized,
+                    Action = action,
+                    PreviousBalanceMillimes = prevBalance,
+                    NewBalanceMillimes = card.BalanceMillimes,
+                    PreviousStatus = prevStatus,
+                    NewStatus = card.Status.ToString(),
+                    Reason = auditReason,
+                    Actor = actor,
+                    CreatedAt = movementAt
+                });
+
+                return FinancialStep.Commit(() =>
+                {
                     // Journalisation sans secrets
                     if (logger.IsEnabled(LogLevel.Information))
                     {
@@ -378,60 +395,8 @@ public static class CardsEndpoints
                         card.Label,
                         card.BalanceMillimes
                     });
-                } catch (Exception ex) {
-                    await PostgresTransactions.SafeRollbackAsync(tx, logger, "card_upsert");
-                    var sqlState = PostgresErrors.TryGetSqlState(ex);
-
-                    // P1-3 / Lot 2C: Si deux requêtes PUT concurrentes créent la même nouvelle carte simultanément (23505 sur IX_Cards_Uid),
-                    // rejouer une unique fois la transaction complète dans un nouveau scope DI afin de verrouiller (SELECT ... FOR UPDATE)
-                    // la carte nouvellement créée et d'enregistrer la seconde opération comme ADMIN_CARD_UPDATED avec PreviousBalance exact.
-                    if (string.Equals(sqlState, "23505", StringComparison.Ordinal) && wasCreatingNewCard && attempt == 0)
-                    {
-                        JanusMetrics.RecordDbTransactionEvent("card_upsert", "conflict_recovered");
-                        if (logger.IsEnabled(LogLevel.Warning))
-                        {
-                            logger.LogWarning("Concurrent card creation collision resolved by retrying under row lock: operation=card_upsert, sqlState=23505, outcome=conflict_recovered, attempt={Attempt}, cardUid={CardUid}",
-                                attempt, normalized);
-                        }
-                        continue;
-                    }
-
-                    if (string.Equals(sqlState, "55P03", StringComparison.Ordinal) || string.Equals(sqlState, "57014", StringComparison.Ordinal))
-                    {
-                        JanusMetrics.RecordDbTransactionEvent("card_upsert", "lock_timeout");
-                        if (logger.IsEnabled(LogLevel.Warning))
-                        {
-                            logger.LogWarning("Database lock or statement timeout on card_upsert (no retry): operation=card_upsert, sqlState={SqlState}, outcome=lock_timeout, attempt={Attempt}, cardUid={CardUid}",
-                                sqlState, attempt, normalized);
-                        }
-                        return Results.Json(new { error = "database_busy", message = "The card record is temporarily locked by a concurrent operation. Please retry." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-
-                    if (string.Equals(sqlState, "40001", StringComparison.Ordinal) || string.Equals(sqlState, "40P01", StringComparison.Ordinal))
-                    {
-                        if (attempt < maxTransientRetries)
-                        {
-                            JanusMetrics.RecordDbTransactionEvent("card_upsert", "transient_retry");
-                            if (logger.IsEnabled(LogLevel.Warning))
-                            {
-                                logger.LogWarning("Transient database conflict on card_upsert; retrying in a new scope: operation=card_upsert, sqlState={SqlState}, outcome=transient_retry, attempt={Attempt}, cardUid={CardUid}",
-                                    sqlState, attempt, normalized);
-                            }
-                            await Task.Delay(TimeSpan.FromMilliseconds(15 * (attempt + 1)));
-                            continue;
-                        }
-
-                        return Results.Json(new { error = "database_busy", message = "Temporary transactional conflict persisted after retries. Please retry." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-
-                    logger.LogError(ex, "Failed to persist admin card upsert for {CardUid} (sqlState={SqlState}, attempt={Attempt})", normalized, sqlState, attempt);
-                    throw;
-                }
+                });
             }
-
-            return Results.Json(new { error = "database_busy", message = "Unable to complete card update after bounded retries." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }).RequireAuthorization(JanusPolicies.AdminOnly).RequireRateLimiting(JanusRateLimitPolicies.Admin);
-
-        return endpoints;
+        });
     }
 }

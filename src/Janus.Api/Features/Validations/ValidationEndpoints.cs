@@ -1,216 +1,178 @@
 using System.Diagnostics;
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
-using Janus.Api.Configuration;
 using Janus.Api.Infrastructure.Persistence;
 using Janus.Api.Observability;
 using Janus.Api.Security;
-using Janus.Domain.Cards;
 using Janus.Domain.Validations;
 using Janus.Domain.Wallet;
+using Microsoft.EntityFrameworkCore;
 
 namespace Janus.Api.Features.Validations;
 
 /// <summary>Validation d'un passage de carte par un terminal (débit, idempotence, anti-passback).</summary>
 public static class ValidationEndpoints
 {
+    private const string OperationName = "validation";
+
+    private static readonly FinancialOperationMessages Messages = new(
+        Busy: "Validation resource is temporarily locked by a concurrent operation. Please retry with the same eventId.",
+        TransientConflictPersisted: "Temporary transactional conflict persisted after retries. Please retry with the same eventId.",
+        RetriesExhausted: "Unable to complete validation after bounded retries.",
+        CommitNotPersisted: "Validation transaction could not be committed. Please retry with the same eventId.",
+        ReconciliationFailed: "Validation commit state is ambiguous and reconciliation failed. Please retry with the same eventId.");
+
     /// <summary>Enregistre les routes de la fonctionnalité.</summary>
     public static IEndpointRouteBuilder MapValidationEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/api/validations", async (ValidationRequest request, ClaimsPrincipal user, IConfiguration config, IServiceScopeFactory scopeFactory, JanusTransactionCommitHook commitHook, TimeProvider timeProvider, ILogger<Program> logger) => {
-            // SEC-02: Identité du terminal déterminée côté serveur par le jeton authentifié
-            var terminalId = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "TERMINAL-DEMO-01";
+        endpoints.MapPost("/api/validations", ValidateAsync)
+            .RequireAuthorization(JanusPolicies.TerminalOnly)
+            .RequireRateLimiting(JanusRateLimitPolicies.Validations);
 
-            var validationStartTime = Stopwatch.GetTimestamp();
-            var serverNow = timeProvider.GetUtcNow();
+        return endpoints;
+    }
 
-            if (request.EventId == Guid.Empty || string.IsNullOrWhiteSpace(request.CardUid) || request.CardUid.Length > 64 || request.EventType != "TRANSPORT_VALIDATION") {
-                var elapsedBadReqSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
-                JanusMetrics.ValidationDurationSeconds.Record(elapsedBadReqSeconds,
-                    new KeyValuePair<string, object?>("decision", "REJECTED"));
-                JanusMetrics.ValidationsTotal.Add(1,
-                    new KeyValuePair<string, object?>("decision", "REJECTED"),
-                    new KeyValuePair<string, object?>("reason", "INVALID_REQUEST"),
-                    new KeyValuePair<string, object?>("terminal_id", terminalId),
-                    new KeyValuePair<string, object?>("duplicate", "false"));
-                return Results.BadRequest(new { error = "invalid_request", message = "eventId, cardUid and supported eventType are required." });
-            }
+    private static async Task<IResult> ValidateAsync(
+        ValidationRequest request,
+        ClaimsPrincipal user,
+        IConfiguration config,
+        FinancialTransactionRunner runner,
+        JanusTransactionCommitHook commitHook,
+        TimeProvider timeProvider)
+    {
+        // SEC-02: Identité du terminal déterminée côté serveur par le jeton authentifié
+        var terminalId = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "TERMINAL-DEMO-01";
+        var metrics = new ValidationMetrics(terminalId, Stopwatch.GetTimestamp());
+        var serverNow = timeProvider.GetUtcNow();
 
-            var fareConfig = config["Fare:AmountMillimes"];
-            if (!int.TryParse(fareConfig, out var fareAmount) || fareAmount <= 0)
-                return Results.Json(new { error = "invalid_fare_configuration", message = "Fare amount must be configured and strictly positive." }, statusCode: 500);
+        if (!ValidationPolicy.IsWellFormed(request.EventId, request.CardUid, request.EventType))
+        {
+            metrics.RecordRejectedInvalidRequest();
+            return Results.BadRequest(new { error = "invalid_request", message = "eventId, cardUid and supported eventType are required." });
+        }
 
-            var apbEnabledConfig = config["AntiPassback:Enabled"];
-            bool isApbEnabled = !string.Equals(apbEnabledConfig, "false", StringComparison.OrdinalIgnoreCase);
-            int apbWindowSeconds = 30;
-            if (int.TryParse(config["AntiPassback:WindowSeconds"], out var parsedWindow) && parsedWindow > 0) {
-                apbWindowSeconds = parsedWindow;
-            }
+        var fareConfig = config["Fare:AmountMillimes"];
+        if (!int.TryParse(fareConfig, out var fareAmount) || fareAmount <= 0)
+            return Results.Json(new { error = "invalid_fare_configuration", message = "Fare amount must be configured and strictly positive." }, statusCode: 500);
 
-            var uid = request.CardUid.Trim().ToUpperInvariant();
-            var canonical = JsonSerializer.Serialize(new { eventId = request.EventId, cardUid = uid, occurredAt = request.OccurredAt?.ToUniversalTime(), eventType = request.EventType });
-            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
-            var lockTimeoutMs = ConfigurationReader.GetClampedInt(config, "Database:LockTimeoutMs", "DATABASE_LOCK_TIMEOUT_MS", 5000, 50, 60000);
-            var statementTimeoutMs = ConfigurationReader.GetClampedInt(config, "Database:StatementTimeoutMs", "DATABASE_STATEMENT_TIMEOUT_MS", 10000, 100, 120000);
-            const int maxTransientRetries = 2;
+        var isApbEnabled = !string.Equals(config["AntiPassback:Enabled"], "false", StringComparison.OrdinalIgnoreCase);
+        var apbWindowSeconds = int.TryParse(config["AntiPassback:WindowSeconds"], out var parsedWindow) && parsedWindow > 0 ? parsedWindow : 30;
 
-            IResult BuildIdempotentOrConflictResponse(ValidationEvent existingRecord, int? reconciledBalanceMillimes)
+        var uid = ValidationPolicy.NormalizeCardUid(request.CardUid);
+        var hash = ValidationPayloadFingerprint.Compute(request.EventId, uid, request.OccurredAt, request.EventType);
+
+        IResult BuildIdempotentOrConflictResponse(ValidationEvent existingRecord, int? reconciledBalanceMillimes)
+        {
+            if (existingRecord.PayloadHash != hash)
             {
-                var elapsedSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
-                if (existingRecord.PayloadHash != hash) {
-                    JanusMetrics.RecordConflictValidation();
-                    JanusMetrics.ValidationDurationSeconds.Record(elapsedSeconds,
-                        new KeyValuePair<string, object?>("decision", "CONFLICT"));
-                    JanusMetrics.ValidationsTotal.Add(1,
-                        new KeyValuePair<string, object?>("decision", "CONFLICT"),
-                        new KeyValuePair<string, object?>("reason", "IDEMPOTENCY_CONFLICT"),
-                        new KeyValuePair<string, object?>("terminal_id", terminalId),
-                        new KeyValuePair<string, object?>("duplicate", "false"));
-                    return Results.Conflict(new { error = "idempotency_conflict", message = "eventId already used with different payload." });
-                }
+                metrics.RecordConflict();
+                return Results.Conflict(new { error = "idempotency_conflict", message = "eventId already used with different payload." });
+            }
 
-                JanusMetrics.ValidationDurationSeconds.Record(elapsedSeconds,
-                    new KeyValuePair<string, object?>("decision", existingRecord.Decision.ToString().ToUpperInvariant()));
-                JanusMetrics.ValidationsTotal.Add(1,
-                    new KeyValuePair<string, object?>("decision", existingRecord.Decision.ToString().ToUpperInvariant()),
-                    new KeyValuePair<string, object?>("reason", existingRecord.Reason),
-                    new KeyValuePair<string, object?>("terminal_id", terminalId),
-                    new KeyValuePair<string, object?>("duplicate", "true"));
+            metrics.RecordOutcome(existingRecord.Decision, existingRecord.Reason, duplicate: true);
+            var decision = existingRecord.Decision.ToString().ToUpperInvariant();
 
-                if (reconciledBalanceMillimes.HasValue)
-                {
-                    return Results.Ok(new {
-                        eventId = existingRecord.EventId,
-                        terminalId = existingRecord.TerminalId,
-                        cardUid = existingRecord.CardUid,
-                        decision = existingRecord.Decision.ToString().ToUpperInvariant(),
-                        reason = existingRecord.Reason,
-                        balanceMillimes = reconciledBalanceMillimes.Value,
-                        amountDebited = (existingRecord.Decision == ValidationDecision.Accepted ? fareAmount : 0),
-                        duplicate = true,
-                        receivedAt = existingRecord.ReceivedAt
-                    });
-                }
-
+            if (reconciledBalanceMillimes.HasValue)
+            {
                 return Results.Ok(new {
                     eventId = existingRecord.EventId,
                     terminalId = existingRecord.TerminalId,
                     cardUid = existingRecord.CardUid,
-                    decision = existingRecord.Decision.ToString().ToUpperInvariant(),
+                    decision,
                     reason = existingRecord.Reason,
+                    balanceMillimes = reconciledBalanceMillimes.Value,
+                    amountDebited = (existingRecord.Decision == ValidationDecision.Accepted ? fareAmount : 0),
                     duplicate = true,
                     receivedAt = existingRecord.ReceivedAt
                 });
             }
 
-            for (int attempt = 0; attempt <= maxTransientRetries; attempt++)
-            {
-                await using var attemptScope = scopeFactory.CreateAsyncScope();
-                var db = attemptScope.ServiceProvider.GetRequiredService<JanusDbContext>();
+            return Results.Ok(new {
+                eventId = existingRecord.EventId,
+                terminalId = existingRecord.TerminalId,
+                cardUid = existingRecord.CardUid,
+                decision,
+                reason = existingRecord.Reason,
+                duplicate = true,
+                receivedAt = existingRecord.ReceivedAt
+            });
+        }
 
-                // Situation 3 : Pré-vérification d'idempotence sur une connexion saine
-                var existing = await db.Validations.AsNoTracking().SingleOrDefaultAsync(v => v.TerminalId == terminalId && v.EventId == request.EventId);
-                if (existing is not null) {
-                    return BuildIdempotentOrConflictResponse(existing, null);
+        Task<ValidationEvent?> FindExistingAsync(JanusDbContext db) =>
+            db.Validations.AsNoTracking().SingleOrDefaultAsync(v => v.TerminalId == terminalId && v.EventId == request.EventId);
+
+        return await runner.ExecuteAsync(new FinancialOperation
+        {
+            Name = OperationName,
+            CorrelationKey = $"terminal={terminalId}, eventId={request.EventId}",
+            Messages = Messages,
+            // Une DbUpdateException avant COMMIT peut masquer la violation d'unicité (TerminalId, EventId) d'un concurrent.
+            IsIdempotencyRace = static (ex, sqlState) =>
+                string.Equals(sqlState, PostgresErrors.UniqueViolation, StringComparison.Ordinal) || ex is DbUpdateException,
+
+            FindCommittedAsync = async db =>
+                await FindExistingAsync(db) is { } existing ? BuildIdempotentOrConflictResponse(existing, null) : null,
+
+            ExecuteAsync = async (db, _) =>
+            {
+                var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {uid} FOR UPDATE").SingleOrDefaultAsync();
+
+                var isPassback = false;
+                if (ValidationPolicy.RequiresPassbackCheck(card?.Status, isApbEnabled))
+                {
+                    var cutoff = serverNow - TimeSpan.FromSeconds(apbWindowSeconds);
+                    isPassback = await db.Validations.AnyAsync(v =>
+                        v.TerminalId == terminalId &&
+                        v.CardUid == uid &&
+                        v.Decision == ValidationDecision.Accepted &&
+                        v.ReceivedAt >= cutoff);
                 }
 
-                await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
-                bool commitAttempted = false;
-                try {
-                    await PostgresTransactions.ApplyTimeoutsAsync(db, lockTimeoutMs, statementTimeoutMs);
+                var outcome = ValidationPolicy.Decide(card?.Status, card?.BalanceMillimes ?? 0, fareAmount, isPassback);
 
-                    var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {uid} FOR UPDATE").SingleOrDefaultAsync();
-
-                    ValidationDecision decision;
-                    string reason;
-                    if (card is null) {
-                        decision = ValidationDecision.Rejected;
-                        reason = "UNKNOWN_CARD";
-                    } else if (card.Status == CardStatus.Revoked) {
-                        decision = ValidationDecision.Rejected;
-                        reason = "CARD_REVOKED";
-                    } else {
-                        bool isPassback = false;
-                        if (isApbEnabled) {
-                            var cutoff = serverNow - TimeSpan.FromSeconds(apbWindowSeconds);
-                            isPassback = await db.Validations.AnyAsync(v =>
-                                v.TerminalId == terminalId &&
-                                v.CardUid == uid &&
-                                v.Decision == ValidationDecision.Accepted &&
-                                v.ReceivedAt >= cutoff);
-                        }
-
-                        if (isPassback) {
-                            decision = ValidationDecision.Rejected;
-                            reason = "PASSBACK_VIOLATION";
-                        } else if (card.BalanceMillimes < fareAmount) {
-                            decision = ValidationDecision.Rejected;
-                            reason = "INSUFFICIENT_FUNDS";
-                        } else {
-                            card.BalanceMillimes -= fareAmount;
-                            decision = ValidationDecision.Accepted;
-                            reason = "ACTIVE_CARD";
-                            db.FareTransactions.Add(new FareTransaction {
-                                CardId = card.Id,
-                                CardUid = card.Uid,
-                                TerminalId = terminalId,
-                                EventId = request.EventId,
-                                AmountMillimes = fareAmount,
-                                BalanceAfterMillimes = card.BalanceMillimes,
-                                CreatedAt = serverNow
-                            });
-                            // LOT-3B / FIN-06 : débit inscrit au journal comptable, avec la même clé d'idempotence (terminal, événement)
-                            db.WalletLedgerEntries.Add(new WalletLedgerEntry {
-                                CardId = card.Id,
-                                CardUid = card.Uid,
-                                EntryType = LedgerEntryTypes.FareDebit,
-                                AmountMillimes = -fareAmount,
-                                BalanceAfterMillimes = card.BalanceMillimes,
-                                IdempotencyKey = $"fare:{terminalId}:{request.EventId:N}",
-                                Actor = terminalId,
-                                CreatedAt = serverNow
-                            });
-                        }
-                    }
-
-                    var record = new ValidationEvent {
+                if (outcome.IsAccepted)
+                {
+                    card!.Debit(fareAmount);
+                    db.FareTransactions.Add(new FareTransaction {
+                        CardId = card.Id,
+                        CardUid = card.Uid,
                         TerminalId = terminalId,
                         EventId = request.EventId,
-                        CardUid = uid,
-                        PayloadHash = hash,
-                        EventType = request.EventType,
-                        Decision = decision,
-                        Reason = reason,
-                        OccurredAt = request.OccurredAt?.ToUniversalTime(),
-                        ReceivedAt = serverNow
-                    };
-                    db.Validations.Add(record);
+                        AmountMillimes = fareAmount,
+                        BalanceAfterMillimes = card.BalanceMillimes,
+                        CreatedAt = serverNow
+                    });
+                    // LOT-3B / FIN-06 : débit inscrit au journal comptable, avec la même clé d'idempotence (terminal, événement)
+                    db.WalletLedgerEntries.Add(new WalletLedgerEntry {
+                        CardId = card.Id,
+                        CardUid = card.Uid,
+                        EntryType = LedgerEntryTypes.FareDebit,
+                        AmountMillimes = -fareAmount,
+                        BalanceAfterMillimes = card.BalanceMillimes,
+                        IdempotencyKey = LedgerIdempotencyKeys.FareDebit(terminalId, request.EventId),
+                        Actor = terminalId,
+                        CreatedAt = serverNow
+                    });
+                }
 
-                    await db.SaveChangesAsync();
-                    commitAttempted = true;
-                    await tx.CommitAsync(CancellationToken.None);
+                var record = new ValidationEvent {
+                    TerminalId = terminalId,
+                    EventId = request.EventId,
+                    CardUid = uid,
+                    PayloadHash = hash,
+                    EventType = request.EventType,
+                    Decision = outcome.Decision,
+                    Reason = outcome.Reason,
+                    OccurredAt = request.OccurredAt?.ToUniversalTime(),
+                    ReceivedAt = serverNow
+                };
+                db.Validations.Add(record);
 
-                    if (commitHook.OnAfterValidationDatabaseCommitAsync is not null)
+                return FinancialStep.Commit(() =>
+                {
+                    metrics.RecordOutcome(record.Decision, record.Reason, duplicate: false);
+                    if (outcome.IsAccepted)
                     {
-                        await commitHook.OnAfterValidationDatabaseCommitAsync(terminalId, request.EventId, CancellationToken.None);
-                    }
-
-                    var elapsedSeconds = Stopwatch.GetElapsedTime(validationStartTime).TotalSeconds;
-                    JanusMetrics.ValidationDurationSeconds.Record(elapsedSeconds,
-                        new KeyValuePair<string, object?>("decision", record.Decision.ToString().ToUpperInvariant()));
-
-                    JanusMetrics.ValidationsTotal.Add(1,
-                        new KeyValuePair<string, object?>("decision", record.Decision.ToString().ToUpperInvariant()),
-                        new KeyValuePair<string, object?>("reason", record.Reason),
-                        new KeyValuePair<string, object?>("terminal_id", terminalId),
-                        new KeyValuePair<string, object?>("duplicate", "false"));
-
-                    if (decision == ValidationDecision.Accepted) {
-                        JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount,
-                            new KeyValuePair<string, object?>("terminal_id", terminalId));
+                        metrics.RecordDebit(fareAmount);
                     }
 
                     return Results.Ok(new {
@@ -220,136 +182,76 @@ public static class ValidationEndpoints
                         decision = record.Decision.ToString().ToUpperInvariant(),
                         reason = record.Reason,
                         balanceMillimes = card?.BalanceMillimes,
-                        amountDebited = (decision == ValidationDecision.Accepted ? fareAmount : 0),
+                        amountDebited = (outcome.IsAccepted ? fareAmount : 0),
                         duplicate = false,
                         receivedAt = record.ReceivedAt
                     });
-                } catch (Exception ex) {
-                    if (commitAttempted)
-                    {
-                        // Situation 2 (P1-1 / Lot 2C) : Échec pendant ou immédiatement après CommitAsync() -> résultat d'engagement AMBIGU.
-                        // Ne jamais réutiliser le DbContext potentiellement corrompu ni déclencher de retry financier aveugle.
-                        // Ouvrir un nouveau scope DI indépendant pour vérifier si PostgreSQL a engagé (TerminalId, EventId).
-                        try
-                        {
-                            await using var reconcileScope = scopeFactory.CreateAsyncScope();
-                            var reconcileDb = reconcileScope.ServiceProvider.GetRequiredService<JanusDbContext>();
-                            var committed = await reconcileDb.Validations.AsNoTracking()
-                                .SingleOrDefaultAsync(v => v.TerminalId == terminalId && v.EventId == request.EventId);
+                });
+            },
 
-                            if (committed is not null)
-                            {
-                                if (committed.PayloadHash != hash)
-                                {
-                                    JanusMetrics.RecordDbTransactionEvent("validation", "conflict_recovered");
-                                    logger.LogWarning(ex,
-                                        "Ambiguous commit reconciliation found conflicting payload: operation=validation, outcome=conflict_recovered, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                        terminalId, request.EventId, attempt);
-                                    return BuildIdempotentOrConflictResponse(committed, null);
-                                }
+            // Lu au moment du COMMIT (et non à la construction) : le point d'injection peut être armé par un test à tout moment.
+            AfterCommitAsync = () => commitHook.OnAfterValidationDatabaseCommitAsync is { } hook
+                ? hook(terminalId, request.EventId, CancellationToken.None)
+                : Task.CompletedTask,
 
-                                var reconciledBalance = await reconcileDb.Cards.AsNoTracking()
-                                    .Where(c => c.Uid == uid)
-                                    .Select(c => (int?)c.BalanceMillimes)
-                                    .SingleOrDefaultAsync();
-
-                                JanusMetrics.RecordDbTransactionEvent("validation", "ambiguous_commit_recovered");
-                                if (committed.Decision == ValidationDecision.Accepted)
-                                {
-                                    JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount,
-                                        new KeyValuePair<string, object?>("terminal_id", terminalId));
-                                }
-
-                                logger.LogWarning(ex,
-                                    "Ambiguous commit reconciled via fresh scope (transaction was committed in PostgreSQL): operation=validation, outcome=ambiguous_commit_recovered, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}, exceptionType={ExceptionType}",
-                                    terminalId, request.EventId, attempt, ex.GetType().Name);
-
-                                return BuildIdempotentOrConflictResponse(committed, reconciledBalance);
-                            }
-                        }
-                        catch (Exception reconcileEx)
-                        {
-                            logger.LogError(reconcileEx,
-                                "Reconciliation query failed after ambiguous commit: operation=validation, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                terminalId, request.EventId, attempt);
-                            return Results.Json(new { error = "database_unavailable", message = "Validation commit state is ambiguous and reconciliation failed. Please retry with the same eventId." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                        }
-
-                        // L'événement n'a pas été trouvé dans un scope sain : le commit n'a pas abouti côté PostgreSQL.
-                        await PostgresTransactions.SafeRollbackAsync(tx, logger, "validation");
-                        if (attempt == 0)
-                        {
-                            JanusMetrics.RecordDbTransactionEvent("validation", "transient_retry");
-                            logger.LogWarning(ex,
-                                "Commit did not persist in PostgreSQL; retrying transaction once in a new scope: operation=validation, outcome=transient_retry, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                terminalId, request.EventId, attempt);
-                            await Task.Delay(TimeSpan.FromMilliseconds(20));
-                            continue;
-                        }
-
-                        return Results.Json(new { error = "database_unavailable", message = "Validation transaction could not be committed. Please retry with the same eventId." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-
-                    // Situation 1 (P1-1 / P1-2) : Échec AVANT CommitAsync() -> aucun débit engagé par cette tentative.
-                    await PostgresTransactions.SafeRollbackAsync(tx, logger, "validation");
-                    var sqlState = PostgresErrors.TryGetSqlState(ex);
-
-                    if (string.Equals(sqlState, "23505", StringComparison.Ordinal) || ex is DbUpdateException)
-                    {
-                        await using var reconcileScope = scopeFactory.CreateAsyncScope();
-                        var reconcileDb = reconcileScope.ServiceProvider.GetRequiredService<JanusDbContext>();
-                        var winner = await reconcileDb.Validations.AsNoTracking()
-                            .SingleOrDefaultAsync(v => v.TerminalId == terminalId && v.EventId == request.EventId);
-
-                        if (winner is not null)
-                        {
-                            JanusMetrics.RecordDbTransactionEvent("validation", "conflict_recovered");
-                            if (logger.IsEnabled(LogLevel.Warning))
-                            {
-                                logger.LogWarning("Concurrent validation race resolved via fresh scope: operation=validation, sqlState={SqlState}, outcome=conflict_recovered, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                    sqlState ?? "DbUpdateException", terminalId, request.EventId, attempt);
-                            }
-                            return BuildIdempotentOrConflictResponse(winner, null);
-                        }
-                    }
-
-                    if (string.Equals(sqlState, "55P03", StringComparison.Ordinal) || string.Equals(sqlState, "57014", StringComparison.Ordinal))
-                    {
-                        JanusMetrics.RecordDbTransactionEvent("validation", "lock_timeout");
-                        if (logger.IsEnabled(LogLevel.Warning))
-                        {
-                            logger.LogWarning("Database lock or statement timeout during validation (no automatic retry): operation=validation, sqlState={SqlState}, outcome=lock_timeout, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                sqlState, terminalId, request.EventId, attempt);
-                        }
-                        return Results.Json(new { error = "database_busy", message = "Validation resource is temporarily locked by a concurrent operation. Please retry with the same eventId." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-
-                    if (string.Equals(sqlState, "40001", StringComparison.Ordinal) || string.Equals(sqlState, "40P01", StringComparison.Ordinal))
-                    {
-                        if (attempt < maxTransientRetries)
-                        {
-                            JanusMetrics.RecordDbTransactionEvent("validation", "transient_retry");
-                            if (logger.IsEnabled(LogLevel.Warning))
-                            {
-                                logger.LogWarning("Transient serialization or deadlock conflict during validation; retrying in a new scope: operation=validation, sqlState={SqlState}, outcome=transient_retry, terminalId={TerminalId}, eventId={EventId}, attempt={Attempt}",
-                                    sqlState, terminalId, request.EventId, attempt);
-                            }
-                            await Task.Delay(TimeSpan.FromMilliseconds(15 * (attempt + 1)));
-                            continue;
-                        }
-
-                        return Results.Json(new { error = "database_busy", message = "Temporary transactional conflict persisted after retries. Please retry with the same eventId." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-
-                    logger.LogError(ex, "Unrecoverable error during validation: terminalId={TerminalId}, eventId={EventId}, sqlState={SqlState}, attempt={Attempt}",
-                        terminalId, request.EventId, sqlState, attempt);
-                    throw;
+            ReconcileAmbiguousCommitAsync = async (db, _) =>
+            {
+                var committed = await FindExistingAsync(db);
+                if (committed is null)
+                {
+                    return null;
                 }
+
+                if (committed.PayloadHash != hash)
+                {
+                    JanusMetrics.RecordDbTransactionEvent(OperationName, "conflict_recovered");
+                    return BuildIdempotentOrConflictResponse(committed, null);
+                }
+
+                var reconciledBalance = await db.Cards.AsNoTracking()
+                    .Where(c => c.Uid == uid)
+                    .Select(c => (int?)c.BalanceMillimes)
+                    .SingleOrDefaultAsync();
+
+                JanusMetrics.RecordDbTransactionEvent(OperationName, "ambiguous_commit_recovered");
+                if (committed.Decision == ValidationDecision.Accepted)
+                {
+                    metrics.RecordDebit(fareAmount);
+                }
+
+                return BuildIdempotentOrConflictResponse(committed, reconciledBalance);
             }
+        });
+    }
 
-            return Results.Json(new { error = "database_busy", message = "Unable to complete validation after bounded retries." }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }).RequireAuthorization(JanusPolicies.TerminalOnly).RequireRateLimiting(JanusRateLimitPolicies.Validations);
+    /// <summary>Enregistrement des métriques d'une validation (labels à cardinalité bornée, jamais d'UID de carte).</summary>
+    private sealed class ValidationMetrics(string terminalId, long startTimestamp)
+    {
+        public void RecordRejectedInvalidRequest() =>
+            Record("REJECTED", "INVALID_REQUEST", duplicate: false);
 
-        return endpoints;
+        public void RecordConflict()
+        {
+            JanusMetrics.RecordConflictValidation();
+            Record("CONFLICT", "IDEMPOTENCY_CONFLICT", duplicate: false);
+        }
+
+        public void RecordOutcome(ValidationDecision decision, string reason, bool duplicate) =>
+            Record(decision.ToString().ToUpperInvariant(), reason, duplicate);
+
+        public void RecordDebit(int fareAmount) =>
+            JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount,
+                new KeyValuePair<string, object?>("terminal_id", terminalId));
+
+        private void Record(string decision, string reason, bool duplicate)
+        {
+            JanusMetrics.ValidationDurationSeconds.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds,
+                new KeyValuePair<string, object?>("decision", decision));
+            JanusMetrics.ValidationsTotal.Add(1,
+                new KeyValuePair<string, object?>("decision", decision),
+                new KeyValuePair<string, object?>("reason", reason),
+                new KeyValuePair<string, object?>("terminal_id", terminalId),
+                new KeyValuePair<string, object?>("duplicate", duplicate ? "true" : "false"));
+        }
     }
 }

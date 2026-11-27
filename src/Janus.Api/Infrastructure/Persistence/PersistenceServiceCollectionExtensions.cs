@@ -6,7 +6,7 @@ namespace Janus.Api.Infrastructure.Persistence;
 /// <summary>Enregistrement des services de persistance.</summary>
 public static class PersistenceServiceCollectionExtensions
 {
-    /// <summary>Ajoute le DbContext (rôle runtime) et le point d'interception post-COMMIT.</summary>
+    /// <summary>Ajoute le DbContext (rôle runtime), le runner transactionnel financier et le point d'interception post-COMMIT.</summary>
     public static IServiceCollection AddJanusPersistence(this IServiceCollection services)
     {
         services.AddDbContext<JanusDbContext>((sp, o) =>
@@ -16,6 +16,7 @@ public static class PersistenceServiceCollectionExtensions
             o.UseNpgsql(cfg.GetConnectionString("JanusDb"), npgsql => npgsql.CommandTimeout(cmdTimeoutSeconds));
         });
         services.AddSingleton<JanusTransactionCommitHook>();
+        services.AddFinancialTransactionRunner();
         return services;
     }
 }

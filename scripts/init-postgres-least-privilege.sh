@@ -138,14 +138,11 @@ run_psql <<-'EOSQL'
         v_admin_user text := current_setting('janus.admin_user');
         v_runtime_user text := current_setting('janus.runtime_user');
         v_runtime_password text := current_setting('janus.runtime_password');
+        v_table text;
         v_seq text;
-        v_sequences text[] := ARRAY[
-            'Cards_Id_seq',
-            'Validations_Id_seq',
-            'FareTransactions_Id_seq',
-            'CardAuditLogs_Id_seq',
-            'WalletLedgerEntries_Id_seq'
-        ];
+        -- Règle unique (Lot 4) : toute table métier est append-only pour le runtime (SELECT, INSERT) ;
+        -- seules les tables listées ici reçoivent aussi UPDATE. Aucun DELETE / TRUNCATE / DDL n'est jamais accordé.
+        v_mutable_tables text[] := ARRAY['Cards'];
     BEGIN
         PERFORM pg_advisory_xact_lock(20261019, 2);
 
@@ -188,43 +185,30 @@ run_psql <<-'EOSQL'
         END IF;
 
         -- 5. Application conditionnelle des droits DML stricts sur les tables existantes
-        IF to_regclass('public."Cards"') IS NOT NULL THEN
-            EXECUTE 'REVOKE ALL ON TABLE public."Cards" FROM PUBLIC';
-            EXECUTE format('REVOKE ALL ON TABLE public."Cards" FROM %I', v_runtime_user);
-            EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE public."Cards" TO %I', v_runtime_user);
-        END IF;
-
-        IF to_regclass('public."Validations"') IS NOT NULL THEN
-            EXECUTE 'REVOKE ALL ON TABLE public."Validations" FROM PUBLIC';
-            EXECUTE format('REVOKE ALL ON TABLE public."Validations" FROM %I', v_runtime_user);
-            EXECUTE format('GRANT SELECT, INSERT ON TABLE public."Validations" TO %I', v_runtime_user);
-        END IF;
-
-        IF to_regclass('public."FareTransactions"') IS NOT NULL THEN
-            EXECUTE 'REVOKE ALL ON TABLE public."FareTransactions" FROM PUBLIC';
-            EXECUTE format('REVOKE ALL ON TABLE public."FareTransactions" FROM %I', v_runtime_user);
-            EXECUTE format('GRANT SELECT, INSERT ON TABLE public."FareTransactions" TO %I', v_runtime_user);
-        END IF;
-
-        IF to_regclass('public."CardAuditLogs"') IS NOT NULL THEN
-            EXECUTE 'REVOKE ALL ON TABLE public."CardAuditLogs" FROM PUBLIC';
-            EXECUTE format('REVOKE ALL ON TABLE public."CardAuditLogs" FROM %I', v_runtime_user);
-            EXECUTE format('GRANT SELECT, INSERT ON TABLE public."CardAuditLogs" TO %I', v_runtime_user);
-        END IF;
-
-        IF to_regclass('public."WalletLedgerEntries"') IS NOT NULL THEN
-            EXECUTE 'REVOKE ALL ON TABLE public."WalletLedgerEntries" FROM PUBLIC';
-            EXECUTE format('REVOKE ALL ON TABLE public."WalletLedgerEntries" FROM %I', v_runtime_user);
-            EXECUTE format('GRANT SELECT, INSERT ON TABLE public."WalletLedgerEntries" TO %I', v_runtime_user);
-        END IF;
-
-        -- 6. Application conditionnelle des droits sur les séquences existantes
-        FOREACH v_seq IN ARRAY v_sequences LOOP
-            IF to_regclass(format('public.%I', v_seq)) IS NOT NULL THEN
-                EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC', v_seq);
-                EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM %I', v_seq, v_runtime_user);
-                EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO %I', v_seq, v_runtime_user);
+        FOR v_table IN
+            SELECT c.relname
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname <> '__EFMigrationsHistory'
+        LOOP
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', v_table);
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM %I', v_table, v_runtime_user);
+            IF v_table = ANY (v_mutable_tables) THEN
+                EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I', v_table, v_runtime_user);
+            ELSE
+                EXECUTE format('GRANT SELECT, INSERT ON TABLE public.%I TO %I', v_table, v_runtime_user);
             END IF;
+        END LOOP;
+
+        FOR v_seq IN
+            SELECT c.relname
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'S'
+        LOOP
+            EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC', v_seq);
+            EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM %I', v_seq, v_runtime_user);
+            EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO %I', v_seq, v_runtime_user);
         END LOOP;
     END $$;
 

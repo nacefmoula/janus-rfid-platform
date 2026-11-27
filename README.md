@@ -88,7 +88,7 @@ Toutes les versions ci-dessous sont extraites des fichiers de projet et manifest
 | **Instrumentation** | OpenTelemetry .NET | `1.20.0` (Exporter Prometheus `1.20.0-beta.1`) | Compteurs et histogrammes métier/sécurité exposés sur `/metrics` | [`src/Janus.Api/JanusMetrics.cs`](src/Janus.Api/JanusMetrics.cs) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Collecte Métriques** | Prometheus | `prom/prometheus:v2.54.1` | Scraping authentifié toutes les `2s` sur `api:8080/metrics` via Docker secret | [`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Visualisation** | Grafana | `grafana/grafana:11.2.0` | Tableau de bord provisionné `janus-overview.json` | [`monitoring/grafana/`](monitoring/grafana/) | `IMPLÉMENTÉ ET TESTÉ` |
-| **Tests Backend** | xUnit + `Mvc.Testing` + Coverlet | `xunit` `2.9.3`, `Microsoft.AspNetCore.Mvc.Testing` `10.0.13`, `coverlet.collector` `6.0.4` | 99 tests d'intégration, de concurrence et de sécurité PostgreSQL | [`tests/Janus.Api.Tests/`](tests/Janus.Api.Tests/) | `IMPLÉMENTÉ ET TESTÉ` |
+| **Tests Backend** | xUnit + `Mvc.Testing` + Coverlet | `xunit` `2.9.3`, `Microsoft.AspNetCore.Mvc.Testing` `10.0.13`, `coverlet.collector` `6.0.4` | 99 tests d'intégration, de concurrence et de sécurité PostgreSQL + 47 tests unitaires du domaine (`tests/Janus.Domain.Tests`) | [`tests/Janus.Api.Tests/`](tests/Janus.Api.Tests/) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Tests Frontend** | Karma + Jasmine + Puppeteer | `karma` `~6.4.0`, `jasmine-core` `~5.6.0`, `puppeteer` `^25.14.0` | 126 tests unitaires de composants, services, pipes et intercepteurs Angular | [`src/Janus.Web/src/`](src/Janus.Web/src/) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Tests E2E & Démo** | Python 3 (`unittest`, `urllib`) | Python `3.12` en CI (`3.10+` en local) | 41 tests d'intégration HTTP, scénario E2E en 7 étapes, vérificateur Prometheus | [`tests/test_api.py`](tests/test_api.py), [`simulator/`](simulator/) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Pipeline CI / SAST** | GitHub Actions, SonarCloud, Trivy | `trivy-action` `v0.36.0`, `dotnet-sonarscanner`, Java `21` (`temurin`) | Build, tests, couverture OpenCover/LCOV, Quality Gate SonarCloud et scan d'images Trivy | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | `IMPLÉMENTÉ — VALIDATION PARTIELLE` *(derniers lots non poussés)* |
@@ -145,7 +145,22 @@ Source de vérité : [`compose.yaml`](compose.yaml).
 | **`prometheus`** | `prom/prometheus:v2.54.1` (`janus-prometheus`) | `frontend_net` | `127.0.0.1:9090->9090` | Non | `1.0` CPU / `512M` | Collecte de `http://api:8080/metrics` toutes les `2s` avec `bearer_token_file: /run/secrets/metrics_token`. |
 | **`grafana`** | `grafana/grafana:11.2.0` (`janus-grafana`) | `frontend_net` | `127.0.0.1:3000->3000` | Non | `0.75` CPU / `256M` | Interface de visualisation connectée à Prometheus avec accès anonyme désactivé par défaut (`GF_AUTH_ANONYMOUS_ENABLED=false`). |
 
-### 3.3 Cheminement d'une requête et séparation de l'architecture cible
+### 3.3 Architecture logicielle du backend (Lot 4)
+
+Le backend est un **monolithe modulaire** en couches, découpé en tranches verticales par fonctionnalité :
+
+```mermaid
+flowchart LR
+    Api["Janus.Api\nFeatures/* (endpoints)\nInfrastructure/* (EF Core, PostgreSQL)\nSecurity, Observability"] --> Domain["Janus.Domain\nEntités + règles métier pures\n(aucune dépendance d'infrastructure)"]
+    UnitTests["Janus.Domain.Tests\n47 tests unitaires"] --> Domain
+    IntegrationTests["Janus.Api.Tests\n99 tests d'intégration"] --> Api
+```
+
+- **Règles métier pures** (`Janus.Domain`) : décision de validation (`ValidationPolicy`), règles de crédit (`CreditPolicy`), invariants de solde (`TransitCard.Debit` / `Credit`), formats contractuels d'idempotence (`ValidationPayloadFingerprint`, `LedgerIdempotencyKeys`, valeur de référence figée par test).
+- **Écritures financières unifiées** : `FinancialTransactionRunner` porte une seule implémentation de la résilience (scope DI par tentative, `READ COMMITTED` + `lock_timeout` / `statement_timeout`, nouvelle tentative uniquement sur `40001`/`40P01`, `503` sans nouvelle tentative sur `55P03`/`57014`, réconciliation par clé d'idempotence après un commit ambigu) pour la validation, la mise à jour et le crédit de carte.
+- **Droits PostgreSQL par règle** : toute table métier est *append-only* pour `janus_runtime` (`SELECT, INSERT`), seule `Cards` reçoit `UPDATE`, l'historique EF est inaccessible ; une nouvelle table n'exige plus de modifier les scripts de privilèges.
+
+### 3.4 Cheminement d'une requête et séparation de l'architecture cible
 1. **Depuis le navigateur (`:4280`) :** Nginx sert les bundles Angular compilés. Lorsqu'un appel `/api/...` est émis, l'intercepteur Angular ([`auth.interceptor.ts`](src/Janus.Web/src/app/core/interceptors/auth.interceptor.ts)) injecte l'en-tête `Authorization: Bearer <token>` correspondant au rôle actif sélectionné dans [`SessionService`](src/Janus.Web/src/app/core/services/session.service.ts).
 2. **Traversée du reverse proxy Nginx :** [`src/Janus.Web/nginx.conf`](src/Janus.Web/nginx.conf) écrase `X-Forwarded-For` avec `$remote_addr` et transmet la requête à `http://api:8080`. Note : `/metrics` n'est **pas** routé par Nginx, empêchant tout accès externe via le port `4280`.
 3. **Pipeline de middlewares ASP.NET Core ([`Program.cs`](src/Janus.Api/Program.cs)) :** la requête traverse successivement `UseExceptionHandler` $\rightarrow$ `UseRouting` $\rightarrow$ `UseForwardedHeaders` (uniquement si l'IP source figure dans `ReverseProxy:TrustedProxies`, par défaut `172.28.0.10`) $\rightarrow$ `UseAuthentication` (`JanusTokenAuthHandler`) $\rightarrow$ `UseRateLimiter` $\rightarrow$ `UseAuthorization` (`JanusAuthorizationMiddlewareResultHandler`) $\rightarrow$ Endpoint Minimal API.
@@ -162,6 +177,7 @@ janus-rfid-platform/
 ├── .dockerignore                                     # Exclusions Docker racine (bin/, obj/, node_modules/, .git/, .env, coverage/)
 ├── .env.example                                      # Modèle des variables d'environnement de développement local (sans secrets réels)
 ├── .gitignore                                        # Exclusions Git (.env, GEMINI.md, bin/, obj/, dist/, coverage/, .sonarqube/)
+├── Directory.Build.props                             # Paramètres .NET communs (net10.0, Nullable, TreatWarningsAsErrors)
 ├── JanusRfid.slnx                                    # Fichier de solution .NET 10 (format XML .slnx)
 ├── README.md                                         # Documentation officielle de référence du projet
 ├── compose.yaml                                      # Orchestration des 6 services Docker, 2 réseaux, secrets et volumes
@@ -184,25 +200,27 @@ janus-rfid-platform/
 │   ├── demo_scenario.py                              # Scénario E2E automatisé en 7 étapes (création, débit, rejeu, anti-passback, audit)
 │   └── janus_simulator.py                            # Simulateur CLI de passages RFID (modes : normal, replay, conflict, revoked, unknown, bad-token)
 ├── src/
-│   ├── Janus.Api/                                    # Backend ASP.NET Core 10 Minimal APIs
-│   │   ├── .dockerignore                             # Exclusion stricte de bin/ et obj/ du contexte de build API
-│   │   ├── Dockerfile                                # Build multi-stage .NET 10 SDK -> ASP.NET Runtime non-root (USER $APP_UID)
-│   │   ├── Janus.Api.csproj                          # Manifeste C# (.NET 10, EF Core 10, Npgsql 10, OpenTelemetry 1.20)
-│   │   ├── JanusMetrics.cs                           # Définition des 6 instruments OpenTelemetry et du hook JanusTransactionCommitHook
-│   │   ├── Models.cs                                 # Entités EF Core (TransitCard, ValidationEvent, FareTransaction, CardAuditLog), DTOs et JanusDbContext
-│   │   ├── Program.cs                                # Configuration du démarrage, mode MigrateOnly, middlewares, résilience et routes REST
+│   ├── Janus.Domain/                                 # Couche Domaine (Lot 4) : entités et règles métier pures, sans dépendance d'infrastructure
+│   │   ├── Cards/                                    # TransitCard (Debit/Credit avec invariants), CardStatus, CardAuditLog
+│   │   ├── Validations/                              # ValidationEvent, ValidationPolicy (décision), ValidationPayloadFingerprint (idempotence)
+│   │   ├── Wallet/                                   # WalletLedgerEntry, FareTransaction, CreditPolicy, LedgerIdempotencyKeys
+│   │   └── JanusSchemaLimits.cs                      # Bornes métier partagées avec le schéma
+│   ├── Janus.Api/                                    # Backend ASP.NET Core 10 Minimal APIs (monolithe modulaire)
+│   │   ├── Dockerfile                                # Build multi-stage (contexte = racine du dépôt) -> ASP.NET Runtime non-root (USER $APP_UID)
+│   │   ├── Program.cs                                # Racine de composition (~40 lignes) : services, pipeline, migrations, routes
+│   │   ├── Features/                                 # Une tranche verticale par fonctionnalité (endpoints + contrats)
+│   │   │   ├── Cards/                                # Inventaire, détail, audit, PUT /api/cards/{uid}
+│   │   │   ├── Wallet/                               # POST /api/cards/{uid}/credits, GET /api/cards/{uid}/ledger
+│   │   │   ├── Validations/                          # POST /api/validations
+│   │   │   ├── Simulator/, Dashboard/, Health/       # Lecture minimale terminaux, synthèse admin, sondes
+│   │   │   └── EndpointRouteBuilderExtensions.cs     # MapJanusEndpoints()
+│   │   ├── Infrastructure/
+│   │   │   ├── Persistence/                          # JanusDbContext + IEntityTypeConfiguration, FinancialTransactionRunner, DatabaseMigrationRunner
+│   │   │   └── ErrorHandling/                        # Gestionnaire global d'exceptions (JSON + traceId, JANUS-SEC-009)
+│   │   ├── Configuration/                            # StartupConfigurationValidator (fail-fast), ConfigurationReader
+│   │   ├── Observability/                            # JanusMetrics (OpenTelemetry) et exposition /metrics
 │   │   ├── Migrations/                               # 7 migrations EF Core séquentielles + JanusDbContextModelSnapshot.cs
-│   │   │   ├── 20261015151954_InitialCreate.cs
-│   │   │   ├── 20261015155513_AddFareTransactionsAndBalance.cs
-│   │   │   ├── 20261015165352_AddCardAuditLogs.cs
-│   │   │   ├── 20261016151210_AddAntiPassbackIndexOnValidations.cs
-│   │   │   ├── 20261016182125_AddCheckConstraintBalanceNonNegative.cs
-│   │   │   └── 20261019215017_AddCardAuditLogsProtectionTrigger.cs
-│   │   └── Security/
-│   │       ├── JanusAuthorizationMiddlewareResultHandler.cs # Formatage JSON des rejets 401/403 et compteurs d'autorisation
-│   │       ├── JanusTokenAuthHandler.cs              # Authentification Bearer à temps constant (FixedTimeEquals) et attribution des claims
-│   │       ├── PostgresLeastPrivilegeProvisioner.cs  # Validation Production des chaînes SQL et provisionnement transactionnel idempotent
-│   │       └── SecurityPathHelper.cs                 # Normalisation des chemins d'URL pour borner la cardinalité des métriques
+│   │   └── Security/                                 # Auth Bearer, politiques (JanusPolicies), rate limiting, provisionnement PostgreSQL
 │   └── Janus.Web/                                    # Frontend Single Page Application Angular 19
 │       ├── .dockerignore                             # Exclusions Docker frontend
 │       ├── Dockerfile                                # Build multi-stage Node 22 Alpine (npm ci --ignore-scripts) -> Nginx 1.27 Alpine (USER nginx)
@@ -217,7 +235,8 @@ janus-rfid-platform/
 └── tests/
     ├── test_api.py                                   # 41 tests d'intégration API boîte noire en Python (concurrence, RBAC, pagination, en-têtes)
     ├── verify_metrics.py                             # Vérificateur de collecte et de cardinalité des métriques dans Prometheus
-    └── Janus.Api.Tests/                              # Projet de tests xUnit .NET 10 (99 tests)
+    ├── Janus.Domain.Tests/                           # 47 tests unitaires du domaine (sans base de données, ~0,1 s)
+    └── Janus.Api.Tests/                              # Projet de tests xUnit .NET 10 (99 tests d'intégration sur PostgreSQL réel)
         ├── AntiPassbackTests.cs                      # Tests de la fenêtre Anti-Passback avec horloge simulée déterministe
         ├── FinancialConcurrencyTests.cs              # Tests de concurrence financière, réconciliation post-COMMIT (Test09), course 23505 (Test10) et lock_timeout (Test11)
         ├── JanusApiFactory.cs                        # WebApplicationFactory<Program> connectée à PostgreSQL avec séparation janus_app / janus_runtime
