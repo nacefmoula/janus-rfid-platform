@@ -42,7 +42,10 @@
     "webpack-dev-middleware": "^7.4.6",
     "webpack-dev-server": "^5.2.6",
     "http-proxy-middleware": "^3.0.7",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
+    "follow-redirects": "^1.16.2",
+    "fast-uri": "^3.1.9",
+    "body-parser": "^1.20.9",
     "@angular/build": {
       "esbuild": "^0.28.1"
     },
