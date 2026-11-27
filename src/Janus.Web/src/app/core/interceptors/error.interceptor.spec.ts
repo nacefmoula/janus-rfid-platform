@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpClient, HttpContext, provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpClient, HttpContext, provideHttpClient, withInterceptors, withXhr } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import {
   errorInterceptor,
@@ -17,7 +17,7 @@ describe('errorInterceptor', () => {
     TestBed.configureTestingModule({
       providers: [
         NotificationService,
-        provideHttpClient(withInterceptors([errorInterceptor])),
+        provideHttpClient(withXhr(), withInterceptors([errorInterceptor])),
         provideHttpClientTesting()
       ]
     });

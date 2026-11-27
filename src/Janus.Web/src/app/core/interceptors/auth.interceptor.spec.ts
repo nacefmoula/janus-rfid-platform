@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpClient, HttpContext, provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpClient, HttpContext, provideHttpClient, withInterceptors, withXhr } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { authInterceptor, SKIP_AUTH_CONTEXT, SKIP_AUTH_HEADER } from './auth.interceptor';
 import { SessionService } from '../services/session.service';
@@ -13,7 +13,7 @@ describe('authInterceptor', () => {
     TestBed.configureTestingModule({
       providers: [
         SessionService,
-        provideHttpClient(withInterceptors([authInterceptor])),
+        provideHttpClient(withXhr(), withInterceptors([authInterceptor])),
         provideHttpClientTesting()
       ]
     });

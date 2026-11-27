@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Output, inject, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, EventEmitter, Output, inject, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
@@ -163,6 +163,7 @@ import { NotificationService } from '../../../core/services/notification.service
       </div>
     }
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: [`
     .app-header {
       height: 64px;

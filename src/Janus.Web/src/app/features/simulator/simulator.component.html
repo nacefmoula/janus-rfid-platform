@@ -32,7 +32,7 @@
         <!-- AFFICHEUR DU VALIDEUR (ÉCRAN HAUTE LISIBILITÉ) -->
         <div class="kiosk-screen" [ngClass]="{
           'screen-accepted': currentResult()?.decision === 'ACCEPTED' && !currentResult()?.duplicate,
-          'screen-duplicate': currentResult()?.duplicate,
+          'screen-duplicate': $safeNavigationMigration(currentResult()?.duplicate),
           'screen-rejected': currentResult()?.decision === 'REJECTED',
           'screen-conflict': currentError()?.status === 409,
           'screen-unauthorized': currentError()?.status === 401,
@@ -319,7 +319,7 @@
                     }
                   </td>
                   <td>
-                    @if (entry.response?.amountDebited !== undefined) {
+                    @if ($safeNavigationMigration(entry.response?.amountDebited) !== undefined) {
                       {{ entry.response!.amountDebited | millimes }}
                     } @else {
                       —

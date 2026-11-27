@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
@@ -14,6 +14,7 @@ import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
   standalone: true,
   imports: [CommonModule, FormsModule, BadgeComponent, MillimesPipe],
   templateUrl: './audit.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: ['./audit.component.css']
 })
 export class AuditComponent implements OnInit, OnDestroy {

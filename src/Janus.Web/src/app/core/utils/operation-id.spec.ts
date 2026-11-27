@@ -12,7 +12,7 @@ describe('newOperationId', () => {
   it('se replie sur crypto.getRandomValues lorsque randomUUID est indisponible (contexte HTTP non sécurisé)', () => {
     const realCrypto = globalThis.crypto;
     spyOnProperty(globalThis, 'crypto', 'get').and.returnValue({
-      getRandomValues: (arr: Uint8Array) => realCrypto.getRandomValues(arr)
+      getRandomValues: (arr: Uint8Array<ArrayBuffer>) => realCrypto.getRandomValues(arr)
     } as unknown as Crypto);
 
     expect(newOperationId()).toMatch(uuidV4);
