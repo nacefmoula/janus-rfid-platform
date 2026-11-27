@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Couche Domaine : entités et règles métier pures (cartes, validations, portefeuille).
+    Aucune dépendance vers ASP.NET Core, EF Core, PostgreSQL ou toute autre infrastructure :
+    ce projet doit rester testable unitairement sans base de données.
+  -->
+  <PropertyGroup>
+    <RootNamespace>Janus.Domain</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

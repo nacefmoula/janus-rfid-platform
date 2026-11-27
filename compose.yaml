@@ -30,7 +30,9 @@ services:
           memory: 128M
 
   db-migrator:
-    build: ./src/Janus.Api
+    build:
+      context: .
+      dockerfile: src/Janus.Api/Dockerfile
     init: true
     restart: "no"
     environment:
@@ -56,7 +58,9 @@ services:
           memory: 64M
 
   api:
-    build: ./src/Janus.Api
+    build:
+      context: .
+      dockerfile: src/Janus.Api/Dockerfile
     init: true
     restart: unless-stopped
     environment:

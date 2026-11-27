@@ -38,6 +38,9 @@ jobs:
       - name: Compile API and Tests in Release configuration
         run: dotnet build --configuration Release --no-restore
 
+      - name: Run domain unit tests (Janus.Domain.Tests, no database)
+        run: dotnet test tests/Janus.Domain.Tests/Janus.Domain.Tests.csproj --configuration Release --no-build
+
   test-and-build-frontend:
     name: 2. Frontend Angular (Tests & Build)
     runs-on: ubuntu-latest
@@ -225,7 +228,7 @@ jobs:
 
       - name: Build Docker images for Janus API and Web
         run: |
-          docker build -t janus-api:${{ github.sha }} src/Janus.Api
+          docker build -f src/Janus.Api/Dockerfile -t janus-api:${{ github.sha }} .
           docker build -t janus-web:${{ github.sha }} src/Janus.Web
 
       # Étape 1 : Génération des rapports SARIF pour audit complet (sévérités HIGH et CRITICAL).
@@ -425,6 +428,11 @@ jobs:
         if: steps.check_token.outputs.has_token == 'true'
         run: |
           dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --collect:"XPlat Code Coverage;Format=opencover" \
+            --results-directory ./coverage
+          dotnet test tests/Janus.Domain.Tests/Janus.Domain.Tests.csproj \
             --configuration Release \
             --no-build \
             --collect:"XPlat Code Coverage;Format=opencover" \

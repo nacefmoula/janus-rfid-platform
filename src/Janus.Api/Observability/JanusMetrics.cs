@@ -1,7 +1,8 @@
 using System.Diagnostics.Metrics;
 
-namespace Janus.Api;
+namespace Janus.Api.Observability;
 
+/// <summary>Instruments OpenTelemetry métier et sécurité à cardinalité bornée (exposés sur /metrics).</summary>
 public static class JanusMetrics
 {
     public const string MeterName = "Janus.Api";
@@ -83,14 +84,4 @@ public static class JanusMetrics
     public static long GetConflictValidationsCount() => Interlocked.Read(ref _conflictValidationsCount);
 
     public static long GetAmbiguousCommitRecoveredCount() => Interlocked.Read(ref _ambiguousCommitRecoveredCount);
-}
-
-/// <summary>
-/// Point d'interception injectable pour les tests d'intégration permettant de simuler de manière déterministe
-/// une perte de connexion ou un échec d'acquittement immédiatement après que PostgreSQL a exécuté COMMIT.
-/// En production, le délégué est null (aucun effet).
-/// </summary>
-public sealed class JanusTransactionCommitHook
-{
-    public Func<string, Guid, CancellationToken, Task>? OnAfterValidationDatabaseCommitAsync { get; set; }
 }
