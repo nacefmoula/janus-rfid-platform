@@ -15,6 +15,10 @@ public static class SecurityPathHelper
         {
             if (p.EndsWith("/audit", StringComparison.OrdinalIgnoreCase))
                 return "/api/cards/{uid}/audit";
+            if (p.EndsWith("/credits", StringComparison.OrdinalIgnoreCase))
+                return "/api/cards/{uid}/credits";
+            if (p.EndsWith("/ledger", StringComparison.OrdinalIgnoreCase))
+                return "/api/cards/{uid}/ledger";
             return "/api/cards/{uid}";
         }
         if (p.Equals("/api/validations", StringComparison.OrdinalIgnoreCase))

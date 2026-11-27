@@ -143,7 +143,8 @@ run_psql <<-'EOSQL'
             'Cards_Id_seq',
             'Validations_Id_seq',
             'FareTransactions_Id_seq',
-            'CardAuditLogs_Id_seq'
+            'CardAuditLogs_Id_seq',
+            'WalletLedgerEntries_Id_seq'
         ];
     BEGIN
         PERFORM pg_advisory_xact_lock(20261019, 2);
@@ -209,6 +210,12 @@ run_psql <<-'EOSQL'
             EXECUTE 'REVOKE ALL ON TABLE public."CardAuditLogs" FROM PUBLIC';
             EXECUTE format('REVOKE ALL ON TABLE public."CardAuditLogs" FROM %I', v_runtime_user);
             EXECUTE format('GRANT SELECT, INSERT ON TABLE public."CardAuditLogs" TO %I', v_runtime_user);
+        END IF;
+
+        IF to_regclass('public."WalletLedgerEntries"') IS NOT NULL THEN
+            EXECUTE 'REVOKE ALL ON TABLE public."WalletLedgerEntries" FROM PUBLIC';
+            EXECUTE format('REVOKE ALL ON TABLE public."WalletLedgerEntries" FROM %I', v_runtime_user);
+            EXECUTE format('GRANT SELECT, INSERT ON TABLE public."WalletLedgerEntries" TO %I', v_runtime_user);
         END IF;
 
         -- 6. Application conditionnelle des droits sur les séquences existantes

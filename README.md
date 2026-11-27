@@ -88,8 +88,8 @@ Toutes les versions ci-dessous sont extraites des fichiers de projet et manifest
 | **Instrumentation** | OpenTelemetry .NET | `1.20.0` (Exporter Prometheus `1.20.0-beta.1`) | Compteurs et histogrammes métier/sécurité exposés sur `/metrics` | [`src/Janus.Api/JanusMetrics.cs`](src/Janus.Api/JanusMetrics.cs) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Collecte Métriques** | Prometheus | `prom/prometheus:v2.54.1` | Scraping authentifié toutes les `2s` sur `api:8080/metrics` via Docker secret | [`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Visualisation** | Grafana | `grafana/grafana:11.2.0` | Tableau de bord provisionné `janus-overview.json` | [`monitoring/grafana/`](monitoring/grafana/) | `IMPLÉMENTÉ ET TESTÉ` |
-| **Tests Backend** | xUnit + `Mvc.Testing` + Coverlet | `xunit` `2.9.3`, `Microsoft.AspNetCore.Mvc.Testing` `10.0.13`, `coverlet.collector` `6.0.4` | 84 tests d'intégration, de concurrence et de sécurité PostgreSQL | [`tests/Janus.Api.Tests/`](tests/Janus.Api.Tests/) | `IMPLÉMENTÉ ET TESTÉ` |
-| **Tests Frontend** | Karma + Jasmine + Puppeteer | `karma` `~6.4.0`, `jasmine-core` `~5.6.0`, `puppeteer` `^25.14.0` | 118 tests unitaires de composants, services, pipes et intercepteurs Angular | [`src/Janus.Web/src/`](src/Janus.Web/src/) | `IMPLÉMENTÉ ET TESTÉ` |
+| **Tests Backend** | xUnit + `Mvc.Testing` + Coverlet | `xunit` `2.9.3`, `Microsoft.AspNetCore.Mvc.Testing` `10.0.13`, `coverlet.collector` `6.0.4` | 96 tests d'intégration, de concurrence et de sécurité PostgreSQL | [`tests/Janus.Api.Tests/`](tests/Janus.Api.Tests/) | `IMPLÉMENTÉ ET TESTÉ` |
+| **Tests Frontend** | Karma + Jasmine + Puppeteer | `karma` `~6.4.0`, `jasmine-core` `~5.6.0`, `puppeteer` `^25.14.0` | 119 tests unitaires de composants, services, pipes et intercepteurs Angular | [`src/Janus.Web/src/`](src/Janus.Web/src/) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Tests E2E & Démo** | Python 3 (`unittest`, `urllib`) | Python `3.12` en CI (`3.10+` en local) | 41 tests d'intégration HTTP, scénario E2E en 7 étapes, vérificateur Prometheus | [`tests/test_api.py`](tests/test_api.py), [`simulator/`](simulator/) | `IMPLÉMENTÉ ET TESTÉ` |
 | **Pipeline CI / SAST** | GitHub Actions, SonarCloud, Trivy | `trivy-action` `v0.36.0`, `dotnet-sonarscanner`, Java `21` (`temurin`) | Build, tests, couverture OpenCover/LCOV, Quality Gate SonarCloud et scan d'images Trivy | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | `IMPLÉMENTÉ — VALIDATION PARTIELLE` *(derniers lots non poussés)* |
 
@@ -191,7 +191,7 @@ janus-rfid-platform/
 │   │   ├── JanusMetrics.cs                           # Définition des 6 instruments OpenTelemetry et du hook JanusTransactionCommitHook
 │   │   ├── Models.cs                                 # Entités EF Core (TransitCard, ValidationEvent, FareTransaction, CardAuditLog), DTOs et JanusDbContext
 │   │   ├── Program.cs                                # Configuration du démarrage, mode MigrateOnly, middlewares, résilience et routes REST
-│   │   ├── Migrations/                               # 6 migrations EF Core séquentielles + JanusDbContextModelSnapshot.cs
+│   │   ├── Migrations/                               # 7 migrations EF Core séquentielles + JanusDbContextModelSnapshot.cs
 │   │   │   ├── 20261015151954_InitialCreate.cs
 │   │   │   ├── 20261015155513_AddFareTransactionsAndBalance.cs
 │   │   │   ├── 20261015165352_AddCardAuditLogs.cs
@@ -217,7 +217,7 @@ janus-rfid-platform/
 └── tests/
     ├── test_api.py                                   # 41 tests d'intégration API boîte noire en Python (concurrence, RBAC, pagination, en-têtes)
     ├── verify_metrics.py                             # Vérificateur de collecte et de cardinalité des métriques dans Prometheus
-    └── Janus.Api.Tests/                              # Projet de tests xUnit .NET 10 (84 tests)
+    └── Janus.Api.Tests/                              # Projet de tests xUnit .NET 10 (96 tests)
         ├── AntiPassbackTests.cs                      # Tests de la fenêtre Anti-Passback avec horloge simulée déterministe
         ├── FinancialConcurrencyTests.cs              # Tests de concurrence financière, réconciliation post-COMMIT (Test09), course 23505 (Test10) et lock_timeout (Test11)
         ├── JanusApiFactory.cs                        # WebApplicationFactory<Program> connectée à PostgreSQL avec séparation janus_app / janus_runtime
@@ -239,6 +239,8 @@ janus-rfid-platform/
 | **4** | **Inventaire paginé et filtré des cartes** | Recherche insensible à la casse par UID/libellé (`q`), filtre par statut (`Active`, `Revoked`, `ALL`) et pagination bornée (`page`, `pageSize` $\le 100$). | [`Program.cs`](src/Janus.Api/Program.cs) (`GET /api/cards`) | [`PaginationTests.cs`](tests/Janus.Api.Tests/PaginationTests.cs) | `IMPLÉMENTÉ ET TESTÉ` |
 | **5** | **Validation billettique et débit atomique** | Débit en millimes entiers sous verrou pessimiste SQL (`SELECT ... FOR UPDATE`), contrôle du statut de la carte et de la contrainte `BalanceMillimes >= 0`. | [`Program.cs`](src/Janus.Api/Program.cs) (`POST /api/validations`) | [`FinancialConcurrencyTests.cs`](tests/Janus.Api.Tests/FinancialConcurrencyTests.cs), `test_api.py` (`test_1` à `test_9`) | `IMPLÉMENTÉ ET TESTÉ` |
 | **6** | **Registre financier (`FareTransactions`)** | Enregistrement systématique de chaque débit accepté avec `CardId`, `CardUid`, `TerminalId`, `EventId`, `AmountMillimes` et `BalanceAfterMillimes`. | [`Models.cs`](src/Janus.Api/Models.cs), [`Program.cs`](src/Janus.Api/Program.cs) | `test_api.py` (`test_1`, `test_12`), `demo_scenario.py` | `IMPLÉMENTÉ ET TESTÉ` |
+| **6b** | **Journal comptable unifié (`WalletLedgerEntries`, Lot 3B)** | Tout mouvement de solde est inscrit dans un journal *append-only* (triggers `BEFORE UPDATE/DELETE/TRUNCATE`, runtime limité à `SELECT, INSERT`) : `OPENING_BALANCE`, `FARE_DEBIT`, `ADMIN_CREDIT`, `ADMIN_ADJUSTMENT`. Invariant vérifié par les tests : `SUM(AmountMillimes) == Cards.BalanceMillimes`. Les soldes existants sont repris en écritures d'ouverture lors de la migration. | [`Models.cs`](src/Janus.Api/Models.cs), [`Program.cs`](src/Janus.Api/Program.cs), migration `AddWalletLedger` | [`WalletLedgerTests.cs`](tests/Janus.Api.Tests/WalletLedgerTests.cs) (`LED01` à `LED12`) | `IMPLÉMENTÉ ET TESTÉ` |
+| **6c** | **Crédit idempotent et garde de concurrence optimiste (Lot 3B)** | `POST /api/cards/{uid}/credits` applique un delta sous verrou (`operationId` client, rejeu `200 duplicate`, payload différent `409`, carte révoquée `409 card_revoked`, plafond `Wallet:MaxCreditMillimes`). `PUT /api/cards/{uid}` accepte `expectedBalanceMillimes` et répond `409 stale_balance` si le solde a changé, au lieu d'écraser un débit concurrent ; l'interface Angular l'envoie systématiquement. | [`Program.cs`](src/Janus.Api/Program.cs), [`cards.component.ts`](src/Janus.Web/src/app/features/cards/cards.component.ts) | [`WalletLedgerTests.cs`](tests/Janus.Api.Tests/WalletLedgerTests.cs), `cards.component.spec.ts` | `IMPLÉMENTÉ ET TESTÉ` |
 | **7** | **Idempotence et détection de conflit (`409`)** | Calcul du hash SHA-256 canonique du payload ; renvoi de la décision initiale (`duplicate=true`) en cas de rejeu exact, ou `409 Conflict` si le payload diffère. | [`Program.cs`](src/Janus.Api/Program.cs), index unique `IX_Validations_TerminalId_EventId` | [`FinancialConcurrencyTests.cs`](tests/Janus.Api.Tests/FinancialConcurrencyTests.cs) (`Test05` à `Test08`), `test_api.py` (`test_5` à `test_7`, `test_11`) | `IMPLÉMENTÉ ET TESTÉ` |
 | **8** | **Règle Anti-Passback multi-terminaux** | Rejet `PASSBACK_VIOLATION` sans débit si la même carte a déjà été acceptée sur la **même borne** durant la fenêtre glissante (`AntiPassback:WindowSeconds`, 30s par défaut), évaluée sur l'horloge serveur `ReceivedAt`. | [`Program.cs`](src/Janus.Api/Program.cs), migration `20261016151210` | [`AntiPassbackTests.cs`](tests/Janus.Api.Tests/AntiPassbackTests.cs), `test_api.py` (`test_20` à `test_23`) | `IMPLÉMENTÉ ET TESTÉ` |
 | **9** | **Timeouts SQL et gestion de la concurrence** | Application de `SET LOCAL lock_timeout` (`5000ms`) et `SET LOCAL statement_timeout` (`10000ms`) par transaction ; reprise bornée sur `40001`/`40P01` et réponse `503 Service Unavailable` sans retry sur `55P03`/`57014`. | [`Program.cs`](src/Janus.Api/Program.cs) (`ApplyTransactionTimeoutsAsync`) | [`FinancialConcurrencyTests.cs`](tests/Janus.Api.Tests/FinancialConcurrencyTests.cs) (`Test11`) | `IMPLÉMENTÉ ET TESTÉ` |
@@ -249,7 +251,7 @@ janus-rfid-platform/
 | **14** | **Observabilité OpenTelemetry, Prometheus & Grafana** | 6 instruments OpenTelemetry à cardinalité bornée exposés sur `/metrics`, collectés toutes les `2s` par Prometheus via secret Docker et affichés dans Grafana. | [`JanusMetrics.cs`](src/Janus.Api/JanusMetrics.cs), [`prometheus.yml`](monitoring/prometheus/prometheus.yml), [`janus-overview.json`](monitoring/grafana/dashboards/janus-overview.json) | [`verify_metrics.py`](tests/verify_metrics.py), `test_api.py` (`test_26`, `test_28`, `test_30`) | `IMPLÉMENTÉ ET TESTÉ` |
 | **15** | **Isolation du migrateur (`db-migrator`) et moindre privilège SQL** | Conteneur one-shot `db-migrator` détenant seul `ConnectionStrings__MigrationDb` (`janus_app`) ; conteneur `api` exécuté avec `Database__SkipMigration=true` et uniquement `janus_runtime`. | [`compose.yaml`](compose.yaml), [`Program.cs`](src/Janus.Api/Program.cs), [`PostgresLeastPrivilegeProvisioner.cs`](src/Janus.Api/Security/PostgresLeastPrivilegeProvisioner.cs), [`init-postgres-least-privilege.sh`](scripts/init-postgres-least-privilege.sh) | [`PostgresSecurityTests.cs`](tests/Janus.Api.Tests/PostgresSecurityTests.cs) (`SEC_LOT2B*`, `SEC_LOT2C_13` à `15`) | `IMPLÉMENTÉ ET TESTÉ` |
 | **16** | **Durcissement Nginx et conteneurs** | Images non-root (`USER $APP_UID`, `USER nginx`), `init: true`, limites CPU/RAM, `server_tokens off`, en-têtes CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`. | [`compose.yaml`](compose.yaml), [`src/Janus.Web/nginx.conf`](src/Janus.Web/nginx.conf), Dockerfiles | `test_api.py` (`test_31`), [`SecurityHardeningTests.cs`](tests/Janus.Api.Tests/SecurityHardeningTests.cs) | `IMPLÉMENTÉ ET TESTÉ` |
-| **17** | **Application Web Angular 19 & Simulateur UI** | SPA avec sélection de rôle (`Terminal 1`, `Terminal 2`, `Admin`), tableau de bord temps réel, simulateur de passage RFID, gestion paginée des cartes et visionneuse d'audit. | [`src/Janus.Web/src/app/`](src/Janus.Web/src/app/) | 118 tests unitaires Karma (`*.spec.ts`) | `IMPLÉMENTÉ ET TESTÉ` *(lecteur RFID simulé)* |
+| **17** | **Application Web Angular 19 & Simulateur UI** | SPA avec sélection de rôle (`Terminal 1`, `Terminal 2`, `Admin`), tableau de bord temps réel, simulateur de passage RFID, gestion paginée des cartes et visionneuse d'audit. | [`src/Janus.Web/src/app/`](src/Janus.Web/src/app/) | 119 tests unitaires Karma (`*.spec.ts`) | `IMPLÉMENTÉ ET TESTÉ` *(lecteur RFID simulé)* |
 | **18** | **Couplage matériel lecteur NFC / puce DESFire & Mode Hors-Ligne** | Lecture radio ISO 14443, authentification cryptographique matérielle SAM/AES et validation déconnectée (*Edge-to-Cloud*). | — | — | `SIMULÉ` (UID logiciel) / `PLANIFIÉ` (architecture cible) |
 
 ---
@@ -265,7 +267,9 @@ En développement local via Docker Compose :
 | Méthode | Route exacte | Politique d'autorisation (Rôle) | Politique Rate-Limit | Paramètres / Corps d'entrée | Codes HTTP & Réponses principales | Effets sur les données |
 | :---: | :--- | :--- | :--- | :--- | :--- | :--- |
 | `POST` | `/api/validations` | `TerminalOnly` (`Terminal` + `validations:create`) | `ValidationsPolicy` (30 req/s/borne, burst 60) | JSON [`ValidationRequest`](src/Janus.Api/Models.cs) : `{"eventId": "uuid", "cardUid": "string(<=64)", "occurredAt": "ISO-8601?", "eventType": "TRANSPORT_VALIDATION"}` | • `200 OK` : `decision` (`ACCEPTED`\|`REJECTED`), `reason`, `balanceMillimes`, `amountDebited`, `duplicate` (`true`\|`false`), `receivedAt`<br>• `400 Bad Request` (`invalid_request`)<br>• `401` / `403`<br>• `409 Conflict` (`idempotency_conflict`)<br>• `429 Too Many Requests`<br>• `503 Service Unavailable` (`database_busy` / `database_unavailable`) | Sous verrou `FOR UPDATE` : débite `Cards.BalanceMillimes` et insère `FareTransactions` (si `ACCEPTED`), et insère `Validations` (sauf si `duplicate=true` ou `409`). |
-| `PUT` | `/api/cards/{uid}` | `AdminOnly` (`Admin` + `cards:admin`) | `AdminPolicy` (15 req/s/admin) | Path `uid` ($\le 64$ car.). JSON [`CardUpsertRequest`](src/Janus.Api/Models.cs) : `{"balanceMillimes": int>=0, "status": "Active\|Revoked?", "label": "string?", "reason": "string?"}` | • `200 OK` : `{"uid", "status", "label", "balanceMillimes"}`<br>• `400 Bad Request` (`invalid_uid`, `invalid_balance`, `invalid_status`)<br>• `401` / `403`<br>• `503 Service Unavailable` (`database_busy`) | Sous verrou `FOR UPDATE` : insère ou met à jour `Cards` et ajoute obligatoirement une entrée `CardAuditLogs` (`ADMIN_CARD_CREATED` ou `ADMIN_CARD_UPDATED`). |
+| `PUT` | `/api/cards/{uid}` | `AdminOnly` (`Admin` + `cards:admin`) | `AdminPolicy` (15 req/s/admin) | Path `uid` ($\le 64$ car.). JSON [`CardUpsertRequest`](src/Janus.Api/Models.cs) : `{"balanceMillimes": int>=0, "status": "Active\|Revoked?", "label": "string(<=120)?", "reason": "string(<=256)?", "expectedBalanceMillimes": "int?"}` | • `200 OK` : `{"uid", "status", "label", "balanceMillimes"}`<br>• `400 Bad Request` (`invalid_uid`, `invalid_balance`, `invalid_status`, `invalid_label`, `invalid_reason`)<br>• `401` / `403`<br>• `409 Conflict` (`stale_balance`, avec `currentBalanceMillimes`)<br>• `503 Service Unavailable` (`database_busy`) | Sous verrou `FOR UPDATE` : insère ou met à jour `Cards`, ajoute une entrée `CardAuditLogs` (`ADMIN_CARD_CREATED` ou `ADMIN_CARD_UPDATED`) et, si le solde change, une écriture `OPENING_BALANCE` / `ADMIN_ADJUSTMENT` dans `WalletLedgerEntries`. |
+| `POST` | `/api/cards/{uid}/credits` | `AdminOnly` | `AdminPolicy` | JSON [`CardCreditRequest`](src/Janus.Api/Models.cs) : `{"operationId": "uuid", "amountMillimes": "1..Wallet:MaxCreditMillimes (1 000 000)", "reason": "string(1..256)"}` | • `200 OK` : `{"uid", "operationId", "amountMillimes", "balanceAfterMillimes", "duplicate", "createdAt"}`<br>• `400` (`invalid_uid`, `invalid_operation_id`, `invalid_amount`, `invalid_reason`)<br>• `404` (`card_not_found`)<br>• `409` (`idempotency_conflict`, `card_revoked`)<br>• `422` (`balance_limit_exceeded`)<br>• `503` (`database_busy`, `database_unavailable`) | Sous verrou `FOR UPDATE` : `Balance += amount`, écriture `ADMIN_CREDIT` (clé `credit:{operationId}`) et audit `ADMIN_CARD_CREDITED`. Réconciliation en scope neuf en cas de commit ambigu. |
+| `GET` | `/api/cards/{uid}/ledger` | `AdminOnly` | `AdminPolicy` | Query : `page` (≥ 1), `pageSize` (1..100, défaut 25) | • `200 OK` : `{"cardUid", "balanceMillimes", "ledgerSumMillimes", "isBalanced", "items", "page", "pageSize", "totalCount", "totalPages"}`<br>• `400` / `404` / `401` / `403` | Lecture seule ; `isBalanced` signale tout écart entre le solde et la somme des mouvements. |
 | `GET` | `/api/cards` | `AdminOnly` (`Admin` + `cards:admin`) | `AdminPolicy` (15 req/s/admin) | Query optionnels : `page` ($\ge 1$, défaut `1`), `pageSize` ($1..100$, défaut `25`), `status` (`Active`, `Revoked`, `ALL`), `q` (filtre UID/libellé) | • `200 OK` : [`PagedResult<AdminTransitCardDto>`](src/Janus.Api/Models.cs) (`items`, `page`, `pageSize`, `totalCount`, `totalPages`)<br>• `400 Bad Request` (`invalid_status`)<br>• `401` / `403` | Lecture seule (`AsNoTracking()`). |
 | `GET` | `/api/demo/cards` | `AdminOnly` (`Admin` + `cards:admin`) | `AdminPolicy` (15 req/s/admin) | Query optionnels : `limit` ($1..100$, défaut `50`), `offset` ($\ge 0$, défaut `0`) | • `200 OK` : tableau JSON `[{"uid", "status", "label", "balanceMillimes"}]`<br>• `401` / `403` | Lecture seule (`AsNoTracking()`). |
 | `GET` | `/api/cards/{uid}` | `AdminOnly` (`Admin` + `cards:admin`) | `AdminPolicy` (15 req/s/admin) | Path `uid`. Query optionnels : `limit` ($1..100$, défaut `50`), `offset` ($\ge 0$, défaut `0`) | • `200 OK` : détail de la carte (`uid`, `status`, `label`, `balanceMillimes`, `transactionsCount`, `limit`, `offset`, `transactions`)<br>• `404 Not Found` (`card_not_found`)<br>• `401` / `403` | Lecture seule (`AsNoTracking()`). Restreint à `AdminOnly` (`JANUS-SEC-002`). |
@@ -288,6 +292,7 @@ En développement local via Docker Compose :
 ```mermaid
 erDiagram
     Cards ||--o{ FareTransactions : "CardId (Restrict)"
+    Cards ||--o{ WalletLedgerEntries : "CardId (Restrict)"
     Cards {
         int Id PK
         varchar(64) Uid UK "IX_Cards_Uid (Unique)"
@@ -317,6 +322,18 @@ erDiagram
         int BalanceAfterMillimes
         timestamptz CreatedAt
     }
+    WalletLedgerEntries {
+        bigint Id PK
+        int CardId FK "IX_WalletLedgerEntries_CardId_Id"
+        varchar(64) CardUid
+        varchar(32) EntryType "CHECK IN (OPENING_BALANCE, FARE_DEBIT, ADMIN_CREDIT, ADMIN_ADJUSTMENT)"
+        int AmountMillimes "signé, CHECK <> 0"
+        int BalanceAfterMillimes "CHECK >= 0"
+        varchar(160) IdempotencyKey UK "fare:/credit:/admin-set:/opening:"
+        varchar(80) Actor
+        varchar(256) Reason "Nullable"
+        timestamptz CreatedAt
+    }
     CardAuditLogs {
         bigint Id PK
         varchar(64) CardUid "IX_CardAuditLogs_CardUid"
@@ -339,7 +356,7 @@ erDiagram
 5. **`FK_FareTransactions_Cards_CardId` (`ON DELETE RESTRICT`) :** interdit la suppression d'une carte référencée par des transactions financières.
 6. **Triggers sur `CardAuditLogs` (`trg_protect_card_audit_logs` et `trg_protect_card_audit_logs_truncate`) :** lèvent une exception PL/pgSQL (`ERRCODE = 'integrity_constraint_violation'`) sur toute tentative d'`UPDATE`, `DELETE` ou `TRUNCATE` sur `CardAuditLogs`.
 
-### 7.3 Historique des 6 migrations EF Core ([`src/Janus.Api/Migrations/`](src/Janus.Api/Migrations/))
+### 7.3 Historique des 7 migrations EF Core ([`src/Janus.Api/Migrations/`](src/Janus.Api/Migrations/))
 
 | # | Migration | Rôle |
 | :---: | :--- | :--- |
@@ -349,6 +366,7 @@ erDiagram
 | **4** | `20261016151210_AddAntiPassbackIndexOnValidations` | Création de l'index composite `IX_Validations_TerminalId_CardUid_Decision_ReceivedAt` pour les requêtes de fenêtre Anti-Passback. |
 | **5** | `20261016182125_AddCheckConstraintBalanceNonNegative` | Ajout de la contrainte `CK_Cards_BalanceMillimes_NonNegative` (`"BalanceMillimes" >= 0`). |
 | **6** | `20261019215017_AddCardAuditLogsProtectionTrigger` | Création de la fonction PL/pgSQL `prevent_card_audit_logs_tampering()` et des deux triggers `BEFORE UPDATE OR DELETE` et `BEFORE TRUNCATE` sur `CardAuditLogs` (sans mot de passe ni création de rôle codés en dur). |
+| **7** | `20261127110313_AddWalletLedger` | Création du journal comptable `WalletLedgerEntries` (contraintes `CHECK`, index unique `IdempotencyKey`), reprise des soldes existants en écritures `OPENING_BALANCE`, triggers *append-only* `prevent_wallet_ledger_tampering()` et droits `SELECT, INSERT` du rôle runtime. |
 
 ### 7.4 Cycle d'exécution des migrations (`db-migrator` vs `api`)
 En déploiement Docker Compose ([`compose.yaml`](compose.yaml)) :
@@ -568,8 +586,8 @@ Les résultats ci-dessous ont été **effectivement exécutés et observés le 3
 | Suite de validation | Commande exacte d'exécution | Résultat observé *(31 oct. 2026 — commit `849650e`)* | Périmètre technique validé |
 | :--- | :--- | :---: | :--- |
 | **Compilation Release & Analyseurs Roslyn** | `dotnet build src/Janus.Api/Janus.Api.csproj -c Release /p:AnalysisLevel=preview /p:AnalysisMode=All` | **PASS** (`0 Error(s)`) | Compilation stricte C# 13 / .NET 10 et règles d'analyse statique Roslyn. |
-| **Tests unitaires & intégration .NET 10 (xUnit)** | `dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj -c Release` | **84 / 84 PASS** (`0 Failed`, `0 Skipped`, `14s`, 27/11/2026, Lot 3A) | Concurrence financière (`SELECT FOR UPDATE`), réconciliation post-COMMIT (`Test09`), course `23505` sur création de carte (`Test10`), `lock_timeout` `55P03` (`Test11`), Anti-Passback avec `SimulatedTimeProvider`, RBAC, pagination, moindre privilège PostgreSQL (`SEC_LOT2B*`), rejet des mots de passe dev en `Production` (`SEC_LOT2B1_11`, `SEC_LOT2C_13`) et code de sortie `1` de `MigrateOnly` sur erreur `28P01` (`SEC_LOT2C_15`). |
-| **Tests unitaires Frontend Angular 19 (Karma)** | `npm --prefix src/Janus.Web test -- --watch=false --browsers=ChromeHeadless` | **118 / 118 PASS** (`0.663s`) | Composants standalone (`Dashboard`, `Simulator`, `Cards`, `Audit`, `Sidebar`), intercepteurs HTTP (`auth`, `error`), `SessionService`, `ApiService` et `MillimesPipe`. |
+| **Tests unitaires & intégration .NET 10 (xUnit)** | `dotnet test tests/Janus.Api.Tests/Janus.Api.Tests.csproj -c Release` | **96 / 96 PASS** (`0 Failed`, `0 Skipped`, `14s`, 27/11/2026, Lot 3B) | Concurrence financière (`SELECT FOR UPDATE`), réconciliation post-COMMIT (`Test09`), course `23505` sur création de carte (`Test10`), `lock_timeout` `55P03` (`Test11`), Anti-Passback avec `SimulatedTimeProvider`, RBAC, pagination, moindre privilège PostgreSQL (`SEC_LOT2B*`), rejet des mots de passe dev en `Production` (`SEC_LOT2B1_11`, `SEC_LOT2C_13`) et code de sortie `1` de `MigrateOnly` sur erreur `28P01` (`SEC_LOT2C_15`). |
+| **Tests unitaires Frontend Angular 19 (Karma)** | `npm --prefix src/Janus.Web test -- --watch=false --browsers=ChromeHeadless` | **119 / 119 PASS** (`1.3s`, 27/11/2026, Lot 3B) | Composants standalone (`Dashboard`, `Simulator`, `Cards`, `Audit`, `Sidebar`), intercepteurs HTTP (`auth`, `error`), `SessionService`, `ApiService` et `MillimesPipe`. |
 | **Tests d'intégration API E2E (Python)** | `python3 tests/test_api.py` | **41 / 41 PASS** (`11.6s`) | Tests boîte noire HTTP contre la pile Docker Compose : débits, rejeux idempotents, conflits `409`, courses concurrentes, Anti-Passback, RBAC, anti-BOLA (`test_24`), rate limiting (`429`), `X-Forwarded-For`, en-têtes de sécurité Nginx et masquage des exceptions `500`. |
 | **Scénario E2E de démonstration** | `python3 simulator/demo_scenario.py` | **PASS** (`7 / 7 étapes`, `exit 0`) | Parcours complet d'une carte : création (3000m) $\rightarrow$ débit borne 1 (1500m) $\rightarrow$ rejeu idempotent $\rightarrow$ rejet Anti-Passback $\rightarrow$ débit borne 2 (0m) $\rightarrow$ rejets solde insuffisant/carte révoquée $\rightarrow$ contrôle RBAC et lecture de l'audit. |
 | **Vérification d'ingestion Prometheus** | `python3 tests/verify_metrics.py` | **PASS** (`exit 0`) | Interrogation de l'API Prometheus (`http://localhost:9090`) : présence des séries `janus_validations_total`, `janus_validation_duration_seconds`, `janus_fare_amount_millimes_total` et absence d'identifiants à forte cardinalité (`cardUid`). |
@@ -596,7 +614,7 @@ Les résultats ci-dessous ont été **effectivement exécutés et observés le 3
 ```mermaid
 flowchart LR
     J1["1. build-dotnet\n.NET 10 Release Build"] --> J3["3. integration-tests\nDocker Compose + Sondes\n72 xUnit + 41 Python E2E\ndemo_scenario + verify_metrics"]
-    J2["2. test-and-build-frontend\nnpm ci --ignore-scripts\n118 tests Karma + LCOV\nBuild Angular production"] --> J3
+    J2["2. test-and-build-frontend\nnpm ci --ignore-scripts\n119 tests Karma + LCOV\nBuild Angular production"] --> J3
     J3 --> J4["4. security-scan (Trivy)\nScan OS + libs (janus-api & janus-web)\nUpload SARIF GitHub Security\nGate bloquant sur CRITICAL corrigibles"]
     J1 --> J5["5. sonarcloud\nPostgres 18 service + init-postgres-least-privilege.sh\nCouverture OpenCover (.NET) + LCOV (Angular)\nQuality Gate SonarCloud (si SONAR_TOKEN présent)"]
     J2 --> J5

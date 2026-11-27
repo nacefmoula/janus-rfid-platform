@@ -209,7 +209,79 @@ namespace Janus.Api.Migrations
                     b.ToTable("Validations");
                 });
 
+            modelBuilder.Entity("Janus.Api.WalletLedgerEntry", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("AmountMillimes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("BalanceAfterMillimes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("CardId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("CardUid")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EntryType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("CardId", "Id");
+
+                    b.ToTable("WalletLedgerEntries", t =>
+                        {
+                            t.HasCheckConstraint("CK_WalletLedgerEntries_AmountNonZero", "\"AmountMillimes\" <> 0");
+
+                            t.HasCheckConstraint("CK_WalletLedgerEntries_BalanceAfterNonNegative", "\"BalanceAfterMillimes\" >= 0");
+
+                            t.HasCheckConstraint("CK_WalletLedgerEntries_EntryType", "\"EntryType\" IN ('OPENING_BALANCE', 'FARE_DEBIT', 'ADMIN_CREDIT', 'ADMIN_ADJUSTMENT')");
+                        });
+                });
+
             modelBuilder.Entity("Janus.Api.FareTransaction", b =>
+                {
+                    b.HasOne("Janus.Api.TransitCard", "Card")
+                        .WithMany()
+                        .HasForeignKey("CardId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Card");
+                });
+
+            modelBuilder.Entity("Janus.Api.WalletLedgerEntry", b =>
                 {
                     b.HasOne("Janus.Api.TransitCard", "Card")
                         .WithMany()

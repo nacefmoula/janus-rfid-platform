@@ -238,7 +238,8 @@ DECLARE
         'Cards_Id_seq',
         'Validations_Id_seq',
         'FareTransactions_Id_seq',
-        'CardAuditLogs_Id_seq'
+        'CardAuditLogs_Id_seq',
+        'WalletLedgerEntries_Id_seq'
     ];
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = v_runtime_user) THEN
@@ -297,6 +298,12 @@ BEGIN
         EXECUTE 'REVOKE ALL ON TABLE public.""CardAuditLogs"" FROM PUBLIC';
         EXECUTE format('REVOKE ALL ON TABLE public.""CardAuditLogs"" FROM %I', v_runtime_user);
         EXECUTE format('GRANT SELECT, INSERT ON TABLE public.""CardAuditLogs"" TO %I', v_runtime_user);
+    END IF;
+
+    IF to_regclass('public.""WalletLedgerEntries""') IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.""WalletLedgerEntries"" FROM PUBLIC';
+        EXECUTE format('REVOKE ALL ON TABLE public.""WalletLedgerEntries"" FROM %I', v_runtime_user);
+        EXECUTE format('GRANT SELECT, INSERT ON TABLE public.""WalletLedgerEntries"" TO %I', v_runtime_user);
     END IF;
 
     FOREACH v_seq IN ARRAY v_sequences LOOP

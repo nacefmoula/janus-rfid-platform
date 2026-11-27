@@ -251,9 +251,29 @@ describe('CardsComponent', () => {
       label: 'Carte Usager Régulier',
       balanceMillimes: 15000,
       status: 'Active',
-      reason: 'Recharge guichet centrale 5 TND'
+      reason: 'Recharge guichet centrale 5 TND',
+      expectedBalanceMillimes: 10000
     });
     expect(component.showEditModal()).toBeFalse();
+  });
+
+  it('LOT-3B : sur 409 stale_balance, recharge le solde courant sans fermer la modale ni écraser le débit', () => {
+    component.session.setAdminToken('valid-admin-token');
+    apiSpy.upsertCard.and.returnValue(throwError(() => ({
+      status: 409,
+      error: { error: 'stale_balance', currentBalanceMillimes: 8500 }
+    })));
+
+    component.openEditModal(mockCards[0]);
+    component.addAmountMillimes(5000);
+    component.editReason = 'Recharge guichet';
+    component.submitCardUpdate();
+
+    expect(component.isSubmitting()).toBeFalse();
+    expect(component.showEditModal()).toBeTrue();
+    expect(component.editBalanceMillimes).toBe(8500);
+    expect(component.editExpectedBalanceMillimes).toBe(8500);
+    expect(component.modalErrorMessage()).toContain('Le solde de la carte a changé');
   });
 
   it('6. clearTokens() vide les cartes chargées et ferme les modales de détail et d\'édition', () => {
