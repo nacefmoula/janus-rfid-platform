@@ -11,7 +11,7 @@ public static class JanusMetrics
 
     /// <summary>
     /// Total number of RFID transport validation attempts by decision, reason, terminal and replay status.
-    /// Labels: decision, reason, terminal_id, duplicate (NO high-cardinality card UIDs).
+    /// Labels: decision, reason, duplicate (NO card UID, eventId or terminal code: unbounded cardinality).
     /// </summary>
     public static readonly Counter<long> ValidationsTotal = Meter.CreateCounter<long>(
         "janus_validations_total",
@@ -29,7 +29,7 @@ public static class JanusMetrics
 
     /// <summary>
     /// Cumulative fare revenue debited in millimes.
-    /// Labels: terminal_id.
+    /// No labels (LOT-5A: terminal codes are unbounded).
     /// </summary>
     public static readonly Counter<long> FareAmountDebitedMillimesTotal = Meter.CreateCounter<long>(
         "janus_fare_amount_millimes_total",

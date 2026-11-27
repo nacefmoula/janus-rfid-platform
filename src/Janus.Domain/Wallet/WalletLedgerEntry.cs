@@ -10,6 +10,8 @@ public sealed class WalletLedgerEntry
 {
     /// <summary>Identifiant technique (ordre d'engagement).</summary>
     public long Id { get; set; }
+    /// <summary>Organisation propriétaire (immuable, isolation multi-organisation).</summary>
+    public int OrganizationId { get; set; }
     /// <summary>Carte concernée.</summary>
     public int CardId { get; set; }
     /// <summary>Navigation vers la carte concernée.</summary>

@@ -1,4 +1,6 @@
 using Janus.Domain;
+using Janus.Domain.Organizations;
+using Janus.Domain.Cards;
 using Janus.Domain.Wallet;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -26,5 +28,11 @@ internal sealed class WalletLedgerEntryConfiguration : IEntityTypeConfiguration<
         e.Property(x => x.Reason).HasMaxLength(JanusSchemaLimits.AuditReasonMaxLength);
         e.Property(x => x.CreatedAt).IsRequired();
         e.HasOne(x => x.Card).WithMany().HasForeignKey(x => x.CardId).OnDelete(DeleteBehavior.Restrict);
+        e.HasIndex(x => x.OrganizationId);
+        e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
+        // LOT-5A : un mouvement appartient toujours à l'organisation de sa carte (garanti par la base, pas seulement par le code).
+        e.HasOne<TransitCard>().WithMany().HasForeignKey(x => new { x.CardId, x.OrganizationId })
+            .HasPrincipalKey(c => new { c.Id, c.OrganizationId }).OnDelete(DeleteBehavior.Restrict)
+            .HasConstraintName("FK_WalletLedgerEntries_Cards_CardId_OrganizationId");
     }
 }

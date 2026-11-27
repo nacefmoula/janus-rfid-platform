@@ -1,4 +1,5 @@
 using Janus.Api.Security;
+using Janus.Domain.Terminals;
 
 namespace Janus.Api.Configuration;
 
@@ -35,6 +36,10 @@ public static class StartupConfigurationValidator
         var startupApbWindow = configuration["AntiPassback:WindowSeconds"];
         if (!string.IsNullOrEmpty(startupApbWindow) && (!int.TryParse(startupApbWindow, out var startupWindow) || startupWindow <= 0))
             throw new InvalidOperationException($"Invalid AntiPassback:WindowSeconds '{startupApbWindow}'. Must be a strictly positive integer.");
+
+        // LOT-5A : durée de validité des jetons de borne, bornée et validée au démarrage (jamais de valeur silencieusement corrigée).
+        if (!TerminalTokenLifetime.TryParse(configuration["Terminals:TokenLifetimeDays"], out _))
+            throw new InvalidOperationException($"Configuration error: 'Terminals:TokenLifetimeDays' must be an integer between 1 and {TerminalTokenLifetime.MaxDays}.");
 
         var isDev = environment.IsDevelopment();
         var migrateOnly = args.Contains("--migrate-only", StringComparer.OrdinalIgnoreCase) ||
@@ -80,16 +85,16 @@ public static class StartupConfigurationValidator
         var adminToken = configuration["AdminAuth:DemoToken"];
         var scrapeToken = configuration["MetricsAuth:ScrapeToken"];
 
+        // LOT-5A : hors Development, les bornes sont enrôlées en base (jetons hachés) ; TerminalAuth:* n'est plus utilisé
+        // pour authentifier et n'est donc plus exigé. En Development, ces jetons servent uniquement à enrôler les bornes de démo.
         if (!isDev)
         {
-            EnsureStrongToken(terminalToken, "TerminalAuth:DemoToken");
-            EnsureStrongToken(terminal2Token, "TerminalAuth:Terminal2Token");
             EnsureStrongToken(adminToken, "AdminAuth:DemoToken");
             EnsureStrongToken(scrapeToken, "MetricsAuth:ScrapeToken");
         }
 
         // Vérification systématique d'unicité de tous les jetons configurés (évite toute collision de rôle Admin/Scraper/Terminal)
-        var configuredTokens = new[] { terminalToken, terminal2Token, adminToken, scrapeToken }
+        var configuredTokens = (isDev ? new[] { terminalToken, terminal2Token, adminToken, scrapeToken } : new[] { adminToken, scrapeToken })
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => t!.Trim())
             .ToList();

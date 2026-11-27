@@ -158,6 +158,7 @@ public static class WalletEndpoints
                 card.Credit(request.AmountMillimes);
 
                 db.WalletLedgerEntries.Add(new WalletLedgerEntry {
+                    OrganizationId = card.OrganizationId,
                     CardId = card.Id,
                     CardUid = card.Uid,
                     EntryType = LedgerEntryTypes.AdminCredit,
@@ -169,6 +170,7 @@ public static class WalletEndpoints
                     CreatedAt = now
                 });
                 db.CardAuditLogs.Add(new CardAuditLog {
+                    OrganizationId = card.OrganizationId,
                     CardUid = card.Uid,
                     Action = "ADMIN_CARD_CREDITED",
                     PreviousBalanceMillimes = previousBalance,

@@ -140,9 +140,15 @@ run_psql <<-'EOSQL'
         v_runtime_password text := current_setting('janus.runtime_password');
         v_table text;
         v_seq text;
-        -- Règle unique (Lot 4) : toute table métier est append-only pour le runtime (SELECT, INSERT) ;
-        -- seules les tables listées ici reçoivent aussi UPDATE. Aucun DELETE / TRUNCATE / DDL n'est jamais accordé.
-        v_mutable_tables text[] := ARRAY['Cards'];
+        v_pair text[];
+        -- Règle unique (Lot 4, affinée au Lot 5A) : toute table métier est append-only pour le runtime (SELECT, INSERT).
+        -- Seules les colonnes listées ici reçoivent UPDATE (droits par colonne) : aucune table n'a d'UPDATE global,
+        -- les colonnes d'identité (Uid, OrganizationId, TokenHash...) restent immuables pour le runtime.
+        -- Aucun DELETE / TRUNCATE / DDL n'est jamais accordé. Toute modification : ici ET dans l'autre fichier, avec un test.
+        v_column_updates text[] := ARRAY[
+            ['Cards', 'Status'], ['Cards', 'Label'], ['Cards', 'BalanceMillimes'],
+            ['Terminals', 'Status'], ['Terminals', 'RevokedAt'], ['Terminals', 'RevokedBy'], ['Terminals', 'RevocationReason']
+        ];
     BEGIN
         PERFORM pg_advisory_xact_lock(20261019, 2);
 
@@ -193,10 +199,19 @@ run_psql <<-'EOSQL'
         LOOP
             EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', v_table);
             EXECUTE format('REVOKE ALL ON TABLE public.%I FROM %I', v_table, v_runtime_user);
-            IF v_table = ANY (v_mutable_tables) THEN
-                EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I', v_table, v_runtime_user);
-            ELSE
-                EXECUTE format('GRANT SELECT, INSERT ON TABLE public.%I TO %I', v_table, v_runtime_user);
+            EXECUTE format('GRANT SELECT, INSERT ON TABLE public.%I TO %I', v_table, v_runtime_user);
+        END LOOP;
+
+        FOREACH v_pair SLICE 1 IN ARRAY v_column_updates
+        LOOP
+            IF EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_attribute a
+                JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relname = v_pair[1] AND a.attname = v_pair[2] AND NOT a.attisdropped
+            ) THEN
+                EXECUTE format('GRANT UPDATE (%I) ON TABLE public.%I TO %I', v_pair[2], v_pair[1], v_runtime_user);
             END IF;
         END LOOP;
 

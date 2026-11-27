@@ -36,13 +36,20 @@ public class JanusAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewar
                 _logger.LogWarning("Authentication challenge: missing token for endpoint {Endpoint}", normalizedEndpoint);
             }
 
+            // LOT-5A : un jeton de borne connu mais refusé reçoit une raison explicite (le porteur prouve déjà détenir le jeton) ;
+            // un jeton inconnu ou absent reste un 401 générique.
+            var failureReason = context.Items[JanusTokenAuthHandler.AuthFailureRecordedItemKey] as string;
+            var (error, message) = failureReason switch
+            {
+                "revoked_token" => ("revoked_token", "This terminal has been revoked."),
+                "expired_token" => ("expired_token", "This terminal token has expired. Enroll the terminal again."),
+                "organization_suspended" => ("organization_suspended", "The organization of this terminal is suspended."),
+                _ => ("unauthorized", "Valid authentication credential required.")
+            };
+
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new
-            {
-                error = "unauthorized",
-                message = "Valid authentication credential required."
-            }), context.RequestAborted);
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { error, message }), context.RequestAborted);
             return;
         }
 

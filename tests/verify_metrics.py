@@ -30,6 +30,9 @@ MAX_RETRIES = int(os.environ.get("PROMETHEUS_CHECK_RETRIES", "10"))
 RETRY_DELAY_SEC = float(os.environ.get("PROMETHEUS_CHECK_DELAY", "2.0"))
 
 
+# Labels interdits : leur nombre de valeurs n'est pas borné (une série par borne, carte ou événement).
+UNBOUNDED_LABELS = ("terminal_id", "card_uid", "cardUid", "event_id", "eventId", "operation_id")
+
 def query_prometheus(query: str, base_url: str = PROMETHEUS_URL) -> dict:
     """Interroge l'endpoint /api/v1/query de Prometheus et retourne le JSON décodé."""
     url = f"{base_url}/api/v1/query?{urllib.parse.urlencode({'query': query})}"
@@ -59,21 +62,22 @@ def validate_validations_payload(payload: dict) -> dict:
 
     decisions = set()
     reasons = set()
-    terminal_ids = set()
     total_validations = 0.0
 
     for item in results:
         metric = item.get("metric", {})
         decision = metric.get("decision")
         reason = metric.get("reason")
-        term = metric.get("terminal_id")
+
+        # LOT-5A : labels à cardinalité bornée uniquement (jamais de code de borne, d'UID de carte ni d'identifiant d'événement)
+        forbidden = sorted(label for label in UNBOUNDED_LABELS if label in metric)
+        if forbidden:
+            raise ValueError(f"Label(s) à cardinalité non bornée présent(s) sur janus_validations_total : {forbidden}")
 
         if decision:
             decisions.add(decision)
         if reason:
             reasons.add(reason)
-        if term:
-            terminal_ids.add(term)
 
         val = item.get("value", [0, "0"])
         try:
@@ -94,7 +98,6 @@ def validate_validations_payload(payload: dict) -> dict:
         "total_validations": total_validations,
         "decisions": decisions,
         "reasons": reasons,
-        "terminal_ids": terminal_ids,
     }
 
 
@@ -153,7 +156,7 @@ def verify_observability():
         sys.exit(1)
 
     print(f"✔ Total validations collectées : {int(summary['total_validations'])}")
-    print(f"✔ Séries actives ({summary['series_count']}) | Décisions : {sorted(list(summary['decisions']))} | Valideurs : {sorted(list(summary['terminal_ids']))}")
+    print(f"✔ Séries actives ({summary['series_count']}) | Décisions : {sorted(list(summary['decisions']))} | Aucun label à cardinalité non bornée")
     print(f"✔ Motifs observés : {sorted(list(summary['reasons']))}")
 
     # 2. Vérification de l'histogramme de latence
@@ -188,15 +191,15 @@ def run_self_tests():
             "resultType": "vector",
             "result": [
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "duplicate": "false"},
                     "value": [1700000000, "10"]
                 },
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "REJECTED", "reason": "INSUFFICIENT_FUNDS", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "REJECTED", "reason": "INSUFFICIENT_FUNDS", "duplicate": "false"},
                     "value": [1700000000, "3"]
                 },
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "CONFLICT", "reason": "IDEMPOTENCY_CONFLICT", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "CONFLICT", "reason": "IDEMPOTENCY_CONFLICT", "duplicate": "false"},
                     "value": [1700000000, "1"]
                 }
             ]
@@ -232,7 +235,7 @@ def run_self_tests():
             "resultType": "vector",
             "result": [
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "duplicate": "false"},
                     "value": [1700000000, "5"]
                 }
             ]
@@ -252,11 +255,11 @@ def run_self_tests():
             "resultType": "vector",
             "result": [
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "duplicate": "false"},
                     "value": [1700000000, "0"]
                 },
                 {
-                    "metric": {"__name__": "janus_validations_total", "decision": "REJECTED", "reason": "INSUFFICIENT_FUNDS", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "metric": {"__name__": "janus_validations_total", "decision": "REJECTED", "reason": "INSUFFICIENT_FUNDS", "duplicate": "false"},
                     "value": [1700000000, "0"]
                 }
             ]
@@ -268,6 +271,26 @@ def run_self_tests():
     except ValueError as ex:
         assert "collectées est nul" in str(ex)
         print(f"  [PASS] Scénario 5 : Total de validations nul correctement rejeté ({ex}).")
+
+    # Scénario 5bis : label à cardinalité non bornée (Échec attendu, LOT-5A)
+    unbounded_label_payload = {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [
+                {
+                    "metric": {"__name__": "janus_validations_total", "decision": "ACCEPTED", "reason": "ACTIVE_CARD", "terminal_id": "TERMINAL-01", "duplicate": "false"},
+                    "value": [1700000000, "4"]
+                }
+            ]
+        }
+    }
+    try:
+        validate_validations_payload(unbounded_label_payload)
+        assert False, "Le cas label terminal_id aurait dû échouer !"
+    except ValueError as ex:
+        assert "cardinalité non bornée" in str(ex)
+        print(f"  [PASS] Scénario 5bis : label terminal_id correctement rejeté ({ex}).")
 
     # Scénario 6 : Validation de l'histogramme de latence (succès et échec)
     valid_hist = {"status": "success", "data": {"result": [{"value": [1700000000, "42"]}]}}

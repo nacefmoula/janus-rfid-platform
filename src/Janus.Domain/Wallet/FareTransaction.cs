@@ -7,6 +7,8 @@ public sealed class FareTransaction
 {
     /// <summary>Identifiant technique.</summary>
     public long Id { get; set; }
+    /// <summary>Organisation propriétaire (immuable, isolation multi-organisation).</summary>
+    public int OrganizationId { get; set; }
     /// <summary>Carte débitée.</summary>
     public int CardId { get; set; }
     /// <summary>Navigation vers la carte débitée.</summary>

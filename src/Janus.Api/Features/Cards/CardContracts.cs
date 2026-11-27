@@ -13,7 +13,12 @@ namespace Janus.Api.Features.Cards;
 /// (428 expected_balance_required sinon). Si le solde courant diffère, la mise à jour est refusée (409 stale_balance),
 /// ce qui empêche d'écraser un débit survenu depuis la lecture du client.
 /// </param>
-public sealed record CardUpsertRequest(int? BalanceMillimes, string? Status, string? Label, string? Reason = null, int? ExpectedBalanceMillimes = null);
+/// <param name="OrganizationCode">
+/// Organisation émettrice (LOT-5A). Obligatoire à la création hors Development (400 organization_required) ; en Development,
+/// absent = organisation de démonstration. Sur une carte existante : absent = inchangé, différent = 409 organization_mismatch
+/// (une carte ne change jamais d'organisation).
+/// </param>
+public sealed record CardUpsertRequest(int? BalanceMillimes, string? Status, string? Label, string? Reason = null, int? ExpectedBalanceMillimes = null, string? OrganizationCode = null);
 
 /// <summary>Vue administrateur d'une carte (avec solde).</summary>
 public sealed record AdminTransitCardDto(
