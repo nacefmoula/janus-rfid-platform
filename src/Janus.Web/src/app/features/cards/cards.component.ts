@@ -276,8 +276,9 @@ export class CardsComponent implements OnInit, OnDestroy {
   }
 
   // --- Gestion du focus & Raccourcis clavier accessibles ---
+  // Angular 21 type $event comme Event pour les écouteurs document:* ; seul preventDefault() est utilisé.
   @HostListener('document:keydown.escape', ['$event'])
-  onEscapeKey(event: KeyboardEvent): void {
+  onEscapeKey(event: Event): void {
     if (this.showEditModal()) {
       if (!this.isSubmitting()) {
         event.preventDefault();
