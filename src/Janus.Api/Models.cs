@@ -1,5 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 namespace Janus.Api;
+/// <summary>
+/// Source unique des longueurs de colonnes partagées entre le schéma EF Core et la validation d'entrée de l'API.
+/// Modifier une valeur ici impose une nouvelle migration.
+/// </summary>
+public static class JanusSchemaLimits
+{
+    public const int CardUidMaxLength = 64;
+    public const int CardLabelMaxLength = 120;
+    public const int AuditReasonMaxLength = 256;
+}
 public enum CardStatus { Active=0, Revoked=1 }
 public enum ValidationDecision { Accepted=0, Rejected=1 }
 public sealed class TransitCard {
@@ -82,8 +92,8 @@ public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbC
         b.Entity<TransitCard>(e => {
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Uid).IsUnique();
-            e.Property(x => x.Uid).HasMaxLength(64).IsRequired();
-            e.Property(x => x.Label).HasMaxLength(120).IsRequired();
+            e.Property(x => x.Uid).HasMaxLength(JanusSchemaLimits.CardUidMaxLength).IsRequired();
+            e.Property(x => x.Label).HasMaxLength(JanusSchemaLimits.CardLabelMaxLength).IsRequired();
             e.Property(x => x.BalanceMillimes).HasDefaultValue(0).IsRequired();
             e.ToTable(t => t.HasCheckConstraint("CK_Cards_BalanceMillimes_NonNegative", "\"BalanceMillimes\" >= 0"));
         });
@@ -115,7 +125,7 @@ public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options):DbC
             e.Property(x => x.Action).HasMaxLength(32).IsRequired();
             e.Property(x => x.NewStatus).HasMaxLength(32).IsRequired();
             e.Property(x => x.PreviousStatus).HasMaxLength(32);
-            e.Property(x => x.Reason).HasMaxLength(256);
+            e.Property(x => x.Reason).HasMaxLength(JanusSchemaLimits.AuditReasonMaxLength);
             e.Property(x => x.Actor).HasMaxLength(64).IsRequired();
             e.Property(x => x.CreatedAt).IsRequired();
         });

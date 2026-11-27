@@ -862,7 +862,9 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
                     ["TerminalAuth:DemoToken"] = strongTerm1,
                     ["TerminalAuth:Terminal2Token"] = strongTerm2,
                     ["AdminAuth:DemoToken"] = strongAdmin,
-                    ["MetricsAuth:ScrapeToken"] = strongScrape
+                    ["MetricsAuth:ScrapeToken"] = strongScrape,
+                    // LOT-3A / FIN-05 : le tarif est désormais obligatoire au démarrage de l'API (hors MigrateOnly)
+                    ["Fare:AmountMillimes"] = "1500"
                 });
             });
         });
