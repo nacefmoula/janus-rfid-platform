@@ -1,11 +1,12 @@
 import { Component, inject, OnInit, OnDestroy, signal, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription, Subject, debounceTime, distinctUntilChanged } from 'rxjs';
+import { Observable, Subscription, Subject, debounceTime, distinctUntilChanged, of, switchMap } from 'rxjs';
 import { JanusApiService } from '../../core/services/api.service';
 import { SessionService } from '../../core/services/session.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { TransitCard, CardDetail, CardUpsertRequest, CardStatus } from '../../core/models/card.model';
+import { newOperationId } from '../../core/utils/operation-id';
 import { BadgeComponent } from '../../shared/components/badge/badge.component';
 import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
 
@@ -48,10 +49,15 @@ export class CardsComponent implements OnInit, OnDestroy {
   // Formulaire d'édition
   targetCardUid = '';
   editLabel = '';
-  editBalanceMillimes = 0;
-  /** Solde lu à l'ouverture de la modale, transmis au serveur comme garde de concurrence optimiste. */
-  editExpectedBalanceMillimes: number | undefined = undefined;
+  /** Solde lu à l'ouverture de la modale (lecture seule : le solde n'est jamais saisi en valeur absolue). */
+  editCurrentBalanceMillimes = 0;
+  /** Montant à créditer (delta, en millimes) via POST /api/cards/{uid}/credits. */
+  editCreditMillimes = 0;
   editStatus: CardStatus = 'Active';
+  private originalLabel = '';
+  private originalStatus: CardStatus = 'Active';
+  /** Identifiant d'idempotence du crédit : conservé tant que le montant ne change pas (nouvel essai sûr). */
+  private creditOperation: { id: string; amount: number } | null = null;
   editReason = '';
 
   private readonly searchSubject = new Subject<string>();
@@ -366,10 +372,13 @@ export class CardsComponent implements OnInit, OnDestroy {
     this.targetCardUid = card.uid;
     this.selectedCardForEdit.set(card);
     this.editLabel = card.label || '';
-    this.editBalanceMillimes = card.balanceMillimes ?? 0;
-    this.editExpectedBalanceMillimes = card.balanceMillimes ?? undefined;
+    this.originalLabel = this.editLabel;
+    this.editCurrentBalanceMillimes = card.balanceMillimes ?? 0;
+    this.editCreditMillimes = 0;
     this.editStatus = (card.status as CardStatus) || 'Active';
+    this.originalStatus = this.editStatus;
     this.editReason = '';
+    this.creditOperation = null;
     this.modalErrorMessage.set(null);
     this.showEditModal.set(true);
 
@@ -387,6 +396,7 @@ export class CardsComponent implements OnInit, OnDestroy {
     this.modalErrorMessage.set(null);
     this.showEditModal.set(false);
     this.selectedCardForEdit.set(null);
+    this.creditOperation = null;
 
     if (this.lastFocusedElement) {
       try {
@@ -396,8 +406,31 @@ export class CardsComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Raccourci de recharge rapide : augmente le montant à créditer (jamais le solde directement). */
   addAmountMillimes(millimesToAdd: number): void {
-    this.editBalanceMillimes += millimesToAdd;
+    this.editCreditMillimes += millimesToAdd;
+  }
+
+  /** Solde estimé après crédit, affiché à titre indicatif (le serveur fait foi). */
+  get projectedBalanceMillimes(): number {
+    return this.editCurrentBalanceMillimes + (this.editCreditMillimes > 0 ? this.editCreditMillimes : 0);
+  }
+
+  private get hasMetadataChange(): boolean {
+    return this.editLabel.trim() !== this.originalLabel.trim() || this.editStatus !== this.originalStatus;
+  }
+
+  /** Réutilise l'operationId tant que le montant est identique : un nouvel essai après erreur réseau ne crédite qu'une fois. */
+  private creditOperationIdFor(amount: number): string {
+    if (!this.creditOperation || this.creditOperation.amount !== amount) {
+      this.creditOperation = { id: newOperationId(), amount };
+    }
+    return this.creditOperation.id;
+  }
+
+  private rejectSubmission(title: string, message: string): void {
+    this.modalErrorMessage.set(message);
+    this.notification.warning(title, message);
   }
 
   submitCardUpdate(): void {
@@ -408,38 +441,67 @@ export class CardsComponent implements OnInit, OnDestroy {
     }
     if (!this.targetCardUid) return;
 
-    if (this.editBalanceMillimes < 0) {
-      this.modalErrorMessage.set('Le solde d\'une carte ne peut pas être négatif.');
-      this.notification.warning('Solde invalide', 'Le solde d\'une carte ne peut pas être négatif.');
+    const credit = Number(this.editCreditMillimes);
+    if (!Number.isInteger(credit) || credit < 0) {
+      this.rejectSubmission('Montant invalide', 'Le montant à créditer doit être un nombre entier de millimes, jamais négatif.');
       return;
     }
 
-    if (!this.editReason.trim()) {
-      this.modalErrorMessage.set('Un motif explicite est obligatoire pour alimenter le journal d\'audit.');
-      this.notification.warning('Motif requis', 'Un motif explicite est obligatoire pour alimenter le journal d\'audit.');
+    const reason = this.editReason.trim();
+    if (!reason) {
+      this.rejectSubmission('Motif requis', 'Un motif explicite est obligatoire pour alimenter le journal d\'audit.');
+      return;
+    }
+
+    const metadataChange = this.hasMetadataChange;
+    if (!metadataChange && credit === 0) {
+      this.rejectSubmission('Aucune modification', 'Aucune modification à enregistrer : saisissez un montant à créditer ou modifiez le libellé / statut.');
+      return;
+    }
+
+    // Règle métier serveur : aucune valeur n'est créditée sur une carte en opposition.
+    if (credit > 0 && this.editStatus === 'Revoked') {
+      this.rejectSubmission('Crédit impossible', 'Une carte révoquée ne peut pas être créditée. Laissez-la active pour la recharger.');
       return;
     }
 
     this.modalErrorMessage.set(null);
     this.updateSub?.unsubscribe();
     const expectedVersion = this.session.sessionVersion();
+    const uid = this.targetCardUid;
     this.isSubmitting.set(true);
 
-    const body: CardUpsertRequest = {
+    // 1. Libellé / statut : PUT sans solde (le solde n'est jamais réécrit par l'interface).
+    // 2. Recharge : crédit delta idempotent. Ordre choisi pour permettre "réactiver puis créditer".
+    const metadataBody: CardUpsertRequest = {
       label: this.editLabel.trim() || undefined,
-      balanceMillimes: this.editBalanceMillimes,
       status: this.editStatus,
-      reason: this.editReason.trim(),
-      ...(this.editExpectedBalanceMillimes !== undefined ? { expectedBalanceMillimes: this.editExpectedBalanceMillimes } : {})
+      reason
     };
+    let metadataSaved = false;
+    const metadata$: Observable<unknown> = metadataChange ? this.api.upsertCard(uid, metadataBody) : of(null);
+    const operationId = credit > 0 ? this.creditOperationIdFor(credit) : null;
 
-    this.updateSub = this.api.upsertCard(this.targetCardUid, body).subscribe({
-      next: (updatedCard) => {
+    this.updateSub = metadata$.pipe(
+      switchMap(() => {
+        metadataSaved = metadataChange;
+        if (metadataChange) {
+          this.originalLabel = this.editLabel.trim();
+          this.originalStatus = this.editStatus;
+        }
+        return operationId ? this.api.creditCard(uid, { operationId, amountMillimes: credit, reason }) : of(null);
+      })
+    ).subscribe({
+      next: (creditResult) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.isSubmitting.set(false);
         this.showEditModal.set(false);
         this.selectedCardForEdit.set(null);
-        this.notification.success('Carte mise à jour', `La carte ${updatedCard.uid} a été actualisée avec succès.`);
+        this.creditOperation = null;
+        const detail = creditResult
+          ? `Crédit de ${(creditResult.amountMillimes / 1000).toFixed(3)} TND enregistré${creditResult.duplicate ? ' (déjà appliqué, aucun double crédit)' : ''}.`
+          : 'Libellé / statut mis à jour.';
+        this.notification.success('Carte mise à jour', `Carte ${uid} : ${detail}`);
         this.loadCards();
 
         if (this.lastFocusedElement) {
@@ -449,21 +511,32 @@ export class CardsComponent implements OnInit, OnDestroy {
           this.lastFocusedElement = null;
         }
 
-        if (this.selectedCardDetail()?.uid === updatedCard.uid) {
-          this.openCardDetail(updatedCard);
+        if (this.selectedCardDetail()?.uid === uid) {
+          this.openCardDetail({ uid, status: this.editStatus, label: this.editLabel.trim(), balanceMillimes: creditResult?.balanceAfterMillimes });
         }
       },
-      error: (err: { status?: number; error?: { error?: string; currentBalanceMillimes?: number } }) => {
+      error: (err: { status?: number; error?: { error?: string; message?: string } }) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.isSubmitting.set(false);
-        if (err?.status === 409 && err.error?.error === 'stale_balance') {
-          // Un mouvement (ex. validation terminal) a modifié le solde pendant l'édition : on ne l'écrase jamais.
-          const current = err.error.currentBalanceMillimes;
-          if (typeof current === 'number') {
-            this.editExpectedBalanceMillimes = current;
-            this.editBalanceMillimes = current;
-          }
-          this.modalErrorMessage.set('Le solde de la carte a changé pendant votre saisie (validation en cours ?). Le solde actuel a été rechargé : vérifiez le montant puis validez à nouveau.');
+        const code = err?.error?.error;
+        const prefix = metadataSaved ? 'Libellé / statut enregistrés, mais le crédit a échoué : ' : '';
+
+        if (err?.status === 409 && code === 'card_revoked') {
+          this.modalErrorMessage.set(prefix + 'la carte est révoquée et ne peut pas être créditée.');
+          return;
+        }
+        if (err?.status === 409 && code === 'idempotency_conflict') {
+          // L'identifiant a déjà servi pour un autre crédit : on en génère un nouveau pour le prochain essai.
+          this.creditOperation = null;
+          this.modalErrorMessage.set(prefix + 'conflit d\'identifiant d\'opération. Vérifiez l\'historique de la carte avant de réessayer.');
+          return;
+        }
+        if (err?.status === 400 && (code === 'invalid_amount' || code === 'invalid_reason')) {
+          this.modalErrorMessage.set(prefix + (err.error?.message ?? 'Données de crédit invalides.'));
+          return;
+        }
+        if (metadataSaved) {
+          this.modalErrorMessage.set(prefix + 'réessayez : le même identifiant d\'opération sera réutilisé, sans risque de double crédit.');
           return;
         }
         this.modalErrorMessage.set('Échec de la mise à jour de la carte. Vérifiez vos droits administrateur ou la validité des données.');

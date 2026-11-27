@@ -74,6 +74,11 @@ def prepare_card(uid, balance_millimes, status="Active", label=None, reason=None
         payload["status"] = status
     if reason is not None:
         payload["reason"] = reason
+    # LOT-3D : toute correction absolue du solde d'une carte existante exige la garde optimiste
+    # expectedBalanceMillimes (428 sinon). On lit donc le solde courant avant de le réinitialiser.
+    s_current, b_current = call(f"/api/cards/{uid}", token=ADMIN_TOKEN)
+    if s_current == 200 and isinstance(b_current, dict):
+        payload["expectedBalanceMillimes"] = b_current["balanceMillimes"]
     return call(f"/api/cards/{uid}", method="PUT", payload=payload, token=token)
 
 def event(uid="04A1B2C3D4E5F6", event_id=None):

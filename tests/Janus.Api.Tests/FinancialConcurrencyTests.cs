@@ -64,7 +64,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         return req;
     }
 
-    private static HttpRequestMessage CreateCardUpsertRequest(string cardUid, int balanceMillimes, string? status = "Active", string? label = null, string? reason = null, string? token = null)
+    private static HttpRequestMessage CreateCardUpsertRequest(string cardUid, int balanceMillimes, string? status = "Active", string? label = null, string? reason = null, string? token = null, int? expectedBalanceMillimes = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/cards/{cardUid}")
         {
@@ -73,7 +73,8 @@ public class FinancialConcurrencyTests : IAsyncLifetime
                 balanceMillimes,
                 status,
                 label = label ?? $"Card {cardUid}",
-                reason = reason ?? "Admin financial balance test"
+                reason = reason ?? "Admin financial balance test",
+                expectedBalanceMillimes
             })
         };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token ?? AdminToken);
@@ -96,7 +97,8 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         var adminTask = Task.Run(async () =>
         {
             using var localClient = _factory.CreateClient();
-            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 15000, reason: "Recharge guichet concurrent"));
+            // LOT-3D : la correction absolue déclare le solde lu (10000) comme garde optimiste obligatoire
+            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 15000, reason: "Recharge guichet concurrent", expectedBalanceMillimes: 10000));
         });
 
         await Task.WhenAll(valTask, adminTask);
@@ -105,23 +107,31 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         var adminResp = await adminTask;
 
         Assert.Equal(HttpStatusCode.OK, valResp.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, adminResp.StatusCode);
+        Assert.True(adminResp.StatusCode is HttpStatusCode.OK or HttpStatusCode.Conflict,
+            $"Unexpected admin status {(int)adminResp.StatusCode}");
 
         using var db = _factory.CreateDbContext();
         var finalCard = await db.Cards.SingleAsync(c => c.Uid == uid);
         var fareTxs = await db.FareTransactions.Where(t => t.CardUid == uid).ToListAsync();
         var audits = await db.CardAuditLogs.Where(a => a.CardUid == uid).ToListAsync();
 
-        // 1. Exactement un débit de validation enregistré
+        // 1. Exactement un débit de validation enregistré, jamais annulé par l'opération administrative
         Assert.Single(fareTxs);
         Assert.Equal(1500, fareTxs[0].AmountMillimes);
 
-        // 2. Exactement une trace d'audit administratif enregistrée
-        Assert.Single(audits);
-        Assert.Equal(15000, audits[0].NewBalanceMillimes);
-
-        // 3. Le solde final doit être cohérent et strictement non négatif
-        Assert.True(finalCard.BalanceMillimes >= 0);
+        if (adminResp.StatusCode == HttpStatusCode.OK)
+        {
+            // L'admin a été sérialisé AVANT le débit : 10000 -> 15000 puis débit -> 13500
+            Assert.Single(audits);
+            Assert.Equal(15000, audits[0].NewBalanceMillimes);
+            Assert.Equal(13500, finalCard.BalanceMillimes);
+        }
+        else
+        {
+            // Le débit est passé en premier : la garde refuse d'écraser 8500 par 15000 (lost update évité)
+            Assert.Empty(audits);
+            Assert.Equal(8500, finalCard.BalanceMillimes);
+        }
     }
 
     // --- Scénario 2 : Deux validations concurrentes lorsque le solde est proche du tarif ---
@@ -299,13 +309,13 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         var task1 = Task.Run(async () =>
         {
             using var localClient = _factory.CreateClient();
-            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 12000, reason: "Recharge A"));
+            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 12000, reason: "Recharge A", expectedBalanceMillimes: 5000));
         });
 
         var task2 = Task.Run(async () =>
         {
             using var localClient = _factory.CreateClient();
-            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 18000, reason: "Recharge B"));
+            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 18000, reason: "Recharge B", expectedBalanceMillimes: 5000));
         });
 
         await Task.WhenAll(task1, task2);
@@ -313,15 +323,18 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         var resp1 = await task1;
         var resp2 = await task2;
 
-        Assert.Equal(HttpStatusCode.OK, resp1.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
+        // LOT-3D : les deux admins se sont basés sur le même solde (5000) -> une seule correction gagne, l'autre reçoit 409
+        var statuses = new[] { resp1.StatusCode, resp2.StatusCode };
+        Assert.Equal(1, statuses.Count(s => s == HttpStatusCode.OK));
+        Assert.Equal(1, statuses.Count(s => s == HttpStatusCode.Conflict));
 
         using var db = _factory.CreateDbContext();
         var card = await db.Cards.SingleAsync(c => c.Uid == uid);
         var audits = await db.CardAuditLogs.Where(a => a.CardUid == uid).OrderBy(a => a.CreatedAt).ToListAsync();
 
-        // Exactement deux audits créés, solde final correspond à la dernière écriture sérialisée
-        Assert.Equal(2, audits.Count);
+        // Exactement un audit, et le solde final est celui de la correction acceptée (aucun écrasement silencieux)
+        Assert.Single(audits);
+        Assert.Equal(audits[0].NewBalanceMillimes, card.BalanceMillimes);
         Assert.True(card.BalanceMillimes == 12000 || card.BalanceMillimes == 18000);
     }
 
@@ -413,7 +426,8 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         var adminTask = Task.Run(async () =>
         {
             using var localClient = _factory.CreateClient();
-            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 20000, reason: "Recharge guichet"));
+            // L'admin s'est basé sur le solde lu AVANT le débit (10000)
+            return await localClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 20000, reason: "Recharge guichet", expectedBalanceMillimes: 10000));
         });
 
         // 3. Synchronisation déterministe via TaskCompletionSource :
@@ -424,28 +438,26 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         await validationTx.CommitAsync();
 
         var adminResp = await adminTask;
-        Assert.Equal(HttpStatusCode.OK, adminResp.StatusCode);
+
+        // LOT-3D : après obtention du verrou, le serveur constate que le solde engagé (8500) diffère du solde
+        // sur lequel l'admin s'est basé (10000) -> 409 stale_balance au lieu d'écraser le débit (défaut CONC-01 / lost update).
+        Assert.Equal(HttpStatusCode.Conflict, adminResp.StatusCode);
+        var adminBody = await adminResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("stale_balance", adminBody.GetProperty("error").GetString());
+        Assert.Equal(8500, adminBody.GetProperty("currentBalanceMillimes").GetInt32());
 
         using var verifyDb = _factory.CreateDbContext();
         var finalCard = await verifyDb.Cards.SingleAsync(c => c.Uid == uid);
         var fareTx = await verifyDb.FareTransactions.Where(t => t.CardUid == uid).SingleAsync();
-        var audit = await verifyDb.CardAuditLogs
-            .Where(a => a.CardUid == uid && a.Reason == "Recharge guichet")
-            .SingleAsync();
 
         // CONTRÔLE DES INVARIANTS FINANCIERS ET DES TRACES D'AUDIT :
-        // 1. Solde final de la carte (20000 m fixé par l'admin)
-        Assert.Equal(20000, finalCard.BalanceMillimes);
-
-        // 2. Trace financière de la validation (débit de 1500 m, solde intermédiaire à 8500 m)
+        // 1. Le débit engagé est préservé
+        Assert.Equal(8500, finalCard.BalanceMillimes);
         Assert.Equal(1500, fareTx.AmountMillimes);
         Assert.Equal(8500, fareTx.BalanceAfterMillimes);
 
-        // 3. Trace d'audit administratif : PreviousBalance DOIT valoir 8500 m (solde validé engagé)
-        // et NON 10000 m (solde antérieur lu hors verrou).
-        Assert.Equal(8500, audit.PreviousBalanceMillimes);
-        Assert.Equal(20000, audit.NewBalanceMillimes);
-        Assert.Equal("Recharge guichet", audit.Reason);
+        // 2. Aucune trace d'audit pour une opération refusée
+        Assert.False(await verifyDb.CardAuditLogs.AnyAsync(a => a.CardUid == uid && a.Reason == "Recharge guichet"));
     }
 
     // --- Scénario 8 : Contrainte SQL PostgreSQL CK_Cards_BalanceMillimes_NonNegative ---
@@ -559,7 +571,8 @@ public class FinancialConcurrencyTests : IAsyncLifetime
             barrier.SignalAndWait(TimeSpan.FromSeconds(5));
             return await clientB.SendAsync(CreateCardUpsertRequest(
                 newUid,
-                balanceMillimes: 9000,
+                // LOT-3D : même solde que A -> si B arrive second, c'est une mise à jour de statut/libellé sans correction de solde
+                balanceMillimes: 4500,
                 status: "Revoked",
                 label: "Pass Concurrent B",
                 reason: "Mise à jour concurrente B"));
@@ -601,7 +614,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         // 4. L'état final de la carte dans Cards correspond exactement à la seconde transaction engagée (aucun écrasement silencieux non tracé)
         Assert.Equal(secondAudit.NewBalanceMillimes, finalCard.BalanceMillimes);
         Assert.Equal(secondAudit.NewStatus, finalCard.Status.ToString());
-        Assert.True(finalCard.BalanceMillimes == 4500 || finalCard.BalanceMillimes == 9000);
+        Assert.Equal(4500, finalCard.BalanceMillimes);
     }
 
     // --- Scénario 11 (Lot 2C - Condition 3 / P1-2) : Dépassement de lock_timeout (55P03) -> 503 Service Unavailable sans retry ---
@@ -641,7 +654,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
             Assert.Equal("database_busy", valBody.GetProperty("error").GetString());
 
             // 3. La mise à jour administrative concurrente doit également retourner 503 Service Unavailable
-            var putResp = await shortLockClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 15000));
+            var putResp = await shortLockClient.SendAsync(CreateCardUpsertRequest(uid, balanceMillimes: 15000, expectedBalanceMillimes: 6000));
             Assert.Equal(HttpStatusCode.ServiceUnavailable, putResp.StatusCode);
             var putBody = await putResp.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Equal("database_busy", putBody.GetProperty("error").GetString());

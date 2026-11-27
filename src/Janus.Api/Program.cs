@@ -857,7 +857,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
     if (string.IsNullOrWhiteSpace(uid) || uid.Length > JanusSchemaLimits.CardUidMaxLength)
         return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
 
-    if (request.BalanceMillimes < 0)
+    if (request.BalanceMillimes is < 0)
         return Results.BadRequest(new { error = "invalid_balance", message = "Balance cannot be negative." });
 
     // LOT-3A / INP-01 : bornes alignées sur le schéma (Cards.Label varchar(120), CardAuditLogs.Reason varchar(256)).
@@ -900,6 +900,19 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
             var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {normalized} FOR UPDATE").SingleOrDefaultAsync();
             wasCreatingNewCard = card is null;
 
+            // LOT-3D / FIN-10 : une modification absolue du solde d'une carte existante exige la garde optimiste.
+            // Sans elle, le serveur ne peut pas distinguer une correction volontaire d'un écrasement accidentel (lecture périmée).
+            if (card is not null && request.BalanceMillimes is int requestedBalance && requestedBalance != card.BalanceMillimes && request.ExpectedBalanceMillimes is null)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                JanusMetrics.RecordDbTransactionEvent("card_upsert", "expected_balance_missing");
+                return Results.Json(new {
+                    error = "expected_balance_required",
+                    message = "Changing the balance of an existing card requires expectedBalanceMillimes. Use POST /api/cards/{uid}/credits for top-ups.",
+                    currentBalanceMillimes = card.BalanceMillimes
+                }, statusCode: StatusCodes.Status428PreconditionRequired);
+            }
+
             // LOT-3B / FIN-08 : garde de concurrence optimiste. Le client déclare le solde sur lequel il s'est basé ;
             // s'il a changé depuis (débit d'un terminal, autre admin), on refuse au lieu d'écraser silencieusement le mouvement.
             if (card is not null && request.ExpectedBalanceMillimes is int expectedBalance && expectedBalance != card.BalanceMillimes)
@@ -933,19 +946,21 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
             string? ledgerEntryType;
 
             if (card is null) {
+                var openingBalance = request.BalanceMillimes ?? 0;
                 card = new TransitCard {
                     Uid = normalized,
                     Status = targetStatus,
                     Label = request.Label ?? $"Card {normalized}",
-                    BalanceMillimes = request.BalanceMillimes
+                    BalanceMillimes = openingBalance
                 };
                 db.Cards.Add(card);
-                balanceDelta = request.BalanceMillimes;
+                balanceDelta = openingBalance;
                 ledgerEntryType = LedgerEntryTypes.OpeningBalance;
             } else {
-                balanceDelta = request.BalanceMillimes - card.BalanceMillimes;
+                var newBalance = request.BalanceMillimes ?? card.BalanceMillimes;
+                balanceDelta = newBalance - card.BalanceMillimes;
                 ledgerEntryType = LedgerEntryTypes.AdminAdjustment;
-                card.BalanceMillimes = request.BalanceMillimes;
+                card.BalanceMillimes = newBalance;
                 card.Status = targetStatus;
                 if (!string.IsNullOrEmpty(request.Label))
                     card.Label = request.Label;
@@ -987,7 +1002,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
             if (logger.IsEnabled(LogLevel.Information))
             {
                 logger.LogInformation("Admin card update: action={Action}, uid={CardUid}, balance={OldBal}->{NewBal}, status={OldStat}->{NewStat}, reason={Reason}, actor={Actor}",
-                    action, normalized, prevBalance, request.BalanceMillimes, prevStatus, card.Status, auditReason, actor);
+                    action, normalized, prevBalance, card.BalanceMillimes, prevStatus, card.Status, auditReason, actor);
             }
 
             return Results.Ok(new {

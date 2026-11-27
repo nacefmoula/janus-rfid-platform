@@ -204,6 +204,19 @@ describe('JanusApiService', () => {
     });
   });
 
+  it('LOT-3D : devrait créditer une carte via POST /api/cards/{uid}/credits avec operationId idempotent', () => {
+    const request = { operationId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301', amountMillimes: 5000, reason: 'Recharge guichet' };
+    service.creditCard(' 04A1B2C3D4E5F6 ', request).subscribe(res => {
+      expect(res.balanceAfterMillimes).toBe(15000);
+      expect(res.duplicate).toBeFalse();
+    });
+
+    const req = httpMock.expectOne('/api/cards/04A1B2C3D4E5F6/credits');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual(request);
+    req.flush({ uid: '04A1B2C3D4E5F6', operationId: request.operationId, amountMillimes: 5000, balanceAfterMillimes: 15000, duplicate: false, createdAt: '2026-11-27T10:00:00Z' });
+  });
+
   it('devrait appeler GET /api/simulator/cards/{uid}/presence pour vérifier le statut sans solde', () => {
     service.getCardPresence('04A1B2C3D4E5F6').subscribe(res => {
       expect(res.uid).toBe('04A1B2C3D4E5F6');

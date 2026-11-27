@@ -225,7 +225,7 @@ public class WalletLedgerTests : IAsyncLifetime
         var uid = await CreateCardViaApiAsync(4000);
 
         using var resp = await _client.SendAsync(Authed(HttpMethod.Put, $"/api/cards/{uid}", JanusApiFactory.AdminToken,
-            new { balanceMillimes = 2500, reason = "Correction erreur de saisie" }));
+            new { balanceMillimes = 2500, reason = "Correction erreur de saisie", expectedBalanceMillimes = 4000 }));
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         using var db = _factory.CreateDbContext();
@@ -233,6 +233,60 @@ public class WalletLedgerTests : IAsyncLifetime
         Assert.Equal(-1500, adjustment.AmountMillimes);
         Assert.Equal(2500, adjustment.BalanceAfterMillimes);
         Assert.Equal("Correction erreur de saisie", adjustment.Reason);
+        await AssertLedgerBalancedAsync(uid);
+    }
+
+    [Fact]
+    public async Task LED13_Upsert_AbsoluteBalanceChange_WithoutGuard_Returns428_AndLeavesCardUntouched()
+    {
+        var uid = await CreateCardViaApiAsync(4000);
+
+        using var resp = await _client.SendAsync(Authed(HttpMethod.Put, $"/api/cards/{uid}", JanusApiFactory.AdminToken,
+            new { balanceMillimes = 9000, reason = "Correction sans garde" }));
+
+        Assert.Equal((HttpStatusCode)428, resp.StatusCode);
+        var body = await JsonAsync(resp);
+        Assert.Equal("expected_balance_required", body.GetProperty("error").GetString());
+        Assert.Equal(4000, body.GetProperty("currentBalanceMillimes").GetInt32());
+
+        using var db = _factory.CreateDbContext();
+        Assert.Equal(4000, (await db.Cards.AsNoTracking().SingleAsync(c => c.Uid == uid)).BalanceMillimes);
+        Assert.Equal(1, await db.CardAuditLogs.CountAsync(a => a.CardUid == uid));
+        Assert.Equal(1, await db.WalletLedgerEntries.CountAsync(e => e.CardUid == uid));
+    }
+
+    [Fact]
+    public async Task LED14_Upsert_MetadataOnly_WithoutBalance_DoesNotRequireGuard_AndKeepsBalance()
+    {
+        var uid = await CreateCardViaApiAsync(4000);
+        // Un débit change le solde : une mise à jour de statut sans solde ne doit ni échouer ni écraser ce débit
+        using (var debit = await ValidateAsync(_client, uid)) Assert.Equal(HttpStatusCode.OK, debit.StatusCode);
+
+        using var resp = await _client.SendAsync(Authed(HttpMethod.Put, $"/api/cards/{uid}", JanusApiFactory.AdminToken,
+            new { status = "Revoked", label = "Carte perdue", reason = "Déclaration de perte" }));
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var db = _factory.CreateDbContext();
+        var card = await db.Cards.AsNoTracking().SingleAsync(c => c.Uid == uid);
+        Assert.Equal(4000 - Fare, card.BalanceMillimes);
+        Assert.Equal(CardStatus.Revoked, card.Status);
+        Assert.Equal("Carte perdue", card.Label);
+        Assert.Equal(0, await db.WalletLedgerEntries.CountAsync(e => e.CardUid == uid && e.EntryType == LedgerEntryTypes.AdminAdjustment));
+        await AssertLedgerBalancedAsync(uid);
+    }
+
+    [Fact]
+    public async Task LED15_Upsert_NewCardWithoutBalance_OpensAtZero()
+    {
+        var uid = NewUid();
+
+        using var resp = await _client.SendAsync(Authed(HttpMethod.Put, $"/api/cards/{uid}", JanusApiFactory.AdminToken,
+            new { label = "Carte vierge", reason = "Émission" }));
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var db = _factory.CreateDbContext();
+        Assert.Equal(0, (await db.Cards.AsNoTracking().SingleAsync(c => c.Uid == uid)).BalanceMillimes);
+        Assert.False(await db.WalletLedgerEntries.AnyAsync(e => e.CardUid == uid));
         await AssertLedgerBalancedAsync(uid);
     }
 

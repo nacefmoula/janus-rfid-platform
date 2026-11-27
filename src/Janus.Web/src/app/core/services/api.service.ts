@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpContext, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { ApiHealth, PrometheusMetricsSummary } from '../models/health.model';
-import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse, PagedResult } from '../models/card.model';
+import { TransitCard, SimulatorCard, CardDetail, CardUpsertRequest, CardAuditResponse, PagedResult, CardCreditRequest, CardCreditResult } from '../models/card.model';
 import { ValidationRequest, ValidationResult } from '../models/validation.model';
 import { SKIP_AUTH_CONTEXT, SKIP_AUTH_HEADER } from '../interceptors/auth.interceptor';
 import { SKIP_ERROR_TOAST_CONTEXT, SKIP_GLOBAL_ERROR_TOAST_HEADER } from '../interceptors/error.interceptor';
@@ -116,6 +116,15 @@ export class JanusApiService {
    */
   upsertCard(uid: string, request: CardUpsertRequest): Observable<TransitCard> {
     return this.http.put<TransitCard>(`${this.basePath}/api/cards/${encodeURIComponent(uid.trim())}`, request);
+  }
+
+  /**
+   * Crédite une carte d'un montant (delta) de façon idempotente : rejouer le même operationId ne crédite qu'une fois.
+   * Requiert STRICTEMENT les droits Admin (HTTP 403 si token terminal).
+   * POST /api/cards/{uid}/credits
+   */
+  creditCard(uid: string, request: CardCreditRequest): Observable<CardCreditResult> {
+    return this.http.post<CardCreditResult>(`${this.basePath}/api/cards/${encodeURIComponent(uid.trim())}/credits`, request);
   }
 
   /**
