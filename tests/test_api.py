@@ -888,13 +888,17 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(call("/api/validations", method="POST", payload=event(), token=SCRAPE_TOKEN)[0], 403)
 
     def test_29_dashboard_summary_and_simulator_cards_endpoints(self):
-        """29. REV-02 : /api/dashboard/summary et /api/simulator/cards fonctionnent avec un jeton Borne sans secret Admin ni Scraper."""
+        """29. REV-02 / LOT-3C : /api/dashboard/summary est réservé à l'Admin (403 pour les bornes) ; /api/simulator/cards reste accessible aux bornes."""
         # Anonyme -> 401
         self.assertEqual(call("/api/dashboard/summary", token=None)[0], 401)
         self.assertEqual(call("/api/simulator/cards", token=None)[0], 401)
 
-        # Terminal 1 & 2 -> 200 sur /api/dashboard/summary
-        s_dash, b_dash = call("/api/dashboard/summary", token=TERMINAL_TOKEN)
+        # Terminal 1 & 2 -> 403 (agrégats financiers réservés à l'administration)
+        self.assertEqual(call("/api/dashboard/summary", token=TERMINAL_TOKEN)[0], 403)
+        self.assertEqual(call("/api/dashboard/summary", token=TERMINAL_02_TOKEN)[0], 403)
+
+        # Admin -> 200 sur /api/dashboard/summary
+        s_dash, b_dash = call("/api/dashboard/summary", token=ADMIN_TOKEN)
         self.assertEqual(s_dash, 200)
         self.assertIn("totalValidations", b_dash)
         self.assertIn("acceptedValidations", b_dash)

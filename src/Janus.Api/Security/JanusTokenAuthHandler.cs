@@ -74,7 +74,7 @@ public class JanusTokenAuthHandler : AuthenticationHandler<AuthenticationSchemeO
         // 1. Terminal 1
         if (CheckToken(suppliedToken, terminalExpected))
         {
-            var principal = CreatePrincipal("TERMINAL-DEMO-01", "Terminal", ["validations:create", "cards:read", "dashboard:read"]);
+            var principal = CreatePrincipal("TERMINAL-DEMO-01", "Terminal", ["validations:create", "cards:read"]);
             var ticket = new AuthenticationTicket(principal, SchemeName);
             return Task.FromResult(AuthenticateResult.Success(ticket));
         }
@@ -82,7 +82,7 @@ public class JanusTokenAuthHandler : AuthenticationHandler<AuthenticationSchemeO
         // 2. Terminal 2
         if (CheckToken(suppliedToken, terminal2Expected))
         {
-            var principal = CreatePrincipal("TERMINAL-DEMO-02", "Terminal", ["validations:create", "cards:read", "dashboard:read"]);
+            var principal = CreatePrincipal("TERMINAL-DEMO-02", "Terminal", ["validations:create", "cards:read"]);
             var ticket = new AuthenticationTicket(principal, SchemeName);
             return Task.FromResult(AuthenticateResult.Success(ticket));
         }
