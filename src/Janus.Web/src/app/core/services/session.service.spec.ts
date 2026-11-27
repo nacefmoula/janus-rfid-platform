@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { SessionService } from './session.service';
 import { ValidationSessionService } from './validation-session.service';
@@ -20,7 +20,7 @@ describe('SessionService & HeaderComponent Session Management', () => {
         ValidationSessionService,
         NotificationService,
         provideRouter([]),
-        provideHttpClient(),
+        provideHttpClient(withXhr()),
         provideHttpClientTesting()
       ]
     });

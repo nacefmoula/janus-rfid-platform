@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { of, Subject, throwError } from 'rxjs';
 import { provideRouter } from '@angular/router';
-import { provideHttpClient, HttpErrorResponse } from '@angular/common/http';
+import { provideHttpClient, HttpErrorResponse, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { DashboardComponent } from './dashboard.component';
 import { JanusApiService } from '../../core/services/api.service';
@@ -37,7 +37,7 @@ describe('DashboardComponent', () => {
         { provide: JanusApiService, useValue: apiSpy },
         ValidationSessionService,
         provideRouter([]),
-        provideHttpClient(),
+        provideHttpClient(withXhr()),
         provideHttpClientTesting()
       ]
     }).compileComponents();

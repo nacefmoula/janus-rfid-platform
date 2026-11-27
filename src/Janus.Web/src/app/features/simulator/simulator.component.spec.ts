@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { of, Subject, throwError } from 'rxjs';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { SimulatorComponent } from './simulator.component';
 import { JanusApiService } from '../../core/services/api.service';
@@ -29,7 +29,7 @@ describe('SimulatorComponent', () => {
         { provide: JanusApiService, useValue: apiSpy },
         SessionService,
         ValidationSessionService,
-        provideHttpClient(),
+        provideHttpClient(withXhr()),
         provideHttpClientTesting()
       ]
     }).compileComponents();

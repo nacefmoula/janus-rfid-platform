@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, signal, HostListener } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, signal, HostListener, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Observable, Subscription, Subject, debounceTime, distinctUntilChanged, of, switchMap } from 'rxjs';
@@ -15,6 +15,7 @@ import { MillimesPipe } from '../../shared/pipes/millimes.pipe';
   standalone: true,
   imports: [CommonModule, FormsModule, BadgeComponent, MillimesPipe],
   templateUrl: './cards.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: ['./cards.component.css']
 })
 export class CardsComponent implements OnInit, OnDestroy {

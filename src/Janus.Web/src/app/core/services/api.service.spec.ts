@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withXhr } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { JanusApiService } from './api.service';
 import { ValidationRequest } from '../models/validation.model';
@@ -12,7 +12,7 @@ describe('JanusApiService', () => {
     TestBed.configureTestingModule({
       providers: [
         JanusApiService,
-        provideHttpClient(),
+        provideHttpClient(withXhr()),
         provideHttpClientTesting()
       ]
     });
