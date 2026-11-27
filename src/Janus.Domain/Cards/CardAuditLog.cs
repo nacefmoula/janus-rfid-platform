@@ -5,6 +5,8 @@ public sealed class CardAuditLog
 {
     /// <summary>Identifiant technique (ordre d'engagement).</summary>
     public long Id { get; set; }
+    /// <summary>Organisation propriétaire (immuable, isolation multi-organisation).</summary>
+    public int OrganizationId { get; set; }
     /// <summary>UID de la carte concernée.</summary>
     public required string CardUid { get; set; }
     /// <summary>Action réalisée (ADMIN_CARD_CREATED, ADMIN_CARD_UPDATED, ADMIN_CARD_CREDITED).</summary>

@@ -5,6 +5,8 @@ public sealed class ValidationEvent
 {
     /// <summary>Identifiant technique.</summary>
     public long Id { get; set; }
+    /// <summary>Organisation propriétaire (immuable, isolation multi-organisation).</summary>
+    public int OrganizationId { get; set; }
     /// <summary>Terminal authentifié à l'origine de l'événement.</summary>
     public required string TerminalId { get; set; }
     /// <summary>Identifiant d'événement généré par le terminal (clé d'idempotence).</summary>

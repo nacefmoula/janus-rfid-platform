@@ -1,5 +1,6 @@
 using Janus.Domain;
 using Janus.Domain.Cards;
+using Janus.Domain.Organizations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -15,5 +16,9 @@ internal sealed class TransitCardConfiguration : IEntityTypeConfiguration<Transi
         e.Property(x => x.Uid).HasMaxLength(JanusSchemaLimits.CardUidMaxLength).IsRequired();
         e.Property(x => x.Label).HasMaxLength(JanusSchemaLimits.CardLabelMaxLength).IsRequired();
         e.Property(x => x.BalanceMillimes).HasDefaultValue(0).IsRequired();
+        e.HasIndex(x => x.OrganizationId);
+        // LOT-5A : clé alternative (Id, OrganizationId), cible des clés étrangères composites des mouvements financiers.
+        e.HasAlternateKey(x => new { x.Id, x.OrganizationId }).HasName("AK_Cards_Id_OrganizationId");
+        e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
     }
 }

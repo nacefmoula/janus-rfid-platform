@@ -78,6 +78,8 @@ services:
       AntiPassback__Enabled: ${ANTIPASSBACK_ENABLED:-true}
       AntiPassback__WindowSeconds: ${ANTIPASSBACK_WINDOW_SECONDS:-30}
       TerminalAuth__Terminal2Token: ${TERMINAL_02_TOKEN:-dev-terminal-02-token-change-me}
+      # LOT-5A : en Development, TerminalAuth__* sert uniquement à enrôler TERMINAL-DEMO-01/02 (empreinte en base) ; ignoré ailleurs.
+      Terminals__TokenLifetimeDays: ${TERMINAL_TOKEN_LIFETIME_DAYS:-365}
       RateLimiting__ValidationsPermitLimit: ${VALIDATIONS_PERMIT_LIMIT:-30}
       RateLimiting__AdminPermitLimit: ${ADMIN_PERMIT_LIMIT:-15}
       RateLimiting__CardsReadPermitLimit: ${CARDS_READ_PERMIT_LIMIT:-60}

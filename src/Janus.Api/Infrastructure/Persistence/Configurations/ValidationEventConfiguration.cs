@@ -1,4 +1,5 @@
 using Janus.Domain.Validations;
+using Janus.Domain.Organizations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -17,5 +18,7 @@ internal sealed class ValidationEventConfiguration : IEntityTypeConfiguration<Va
         e.Property(x => x.PayloadHash).HasMaxLength(64).IsRequired();
         e.Property(x => x.EventType).HasMaxLength(80).IsRequired();
         e.Property(x => x.Reason).HasMaxLength(80).IsRequired();
+        e.HasIndex(x => x.OrganizationId);
+        e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -36,6 +36,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         using var db = _factory.CreateDbContext();
         var card = new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = uid,
             Status = status,
             Label = label ?? $"Test Card {uid}",
@@ -412,6 +413,7 @@ public class FinancialConcurrencyTests : IAsyncLifetime
         cardInTx.BalanceMillimes -= 1500;
         validationDb.FareTransactions.Add(new FareTransaction
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             CardId = cardInTx.Id,
             CardUid = uid,
             TerminalId = "TERMINAL-DEMO-01",

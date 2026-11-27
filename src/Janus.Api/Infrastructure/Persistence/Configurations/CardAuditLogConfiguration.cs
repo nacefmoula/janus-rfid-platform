@@ -1,4 +1,5 @@
 using Janus.Domain;
+using Janus.Domain.Organizations;
 using Janus.Domain.Cards;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -19,5 +20,7 @@ internal sealed class CardAuditLogConfiguration : IEntityTypeConfiguration<CardA
         e.Property(x => x.Reason).HasMaxLength(JanusSchemaLimits.AuditReasonMaxLength);
         e.Property(x => x.Actor).HasMaxLength(64).IsRequired();
         e.Property(x => x.CreatedAt).IsRequired();
+        e.HasIndex(x => x.OrganizationId);
+        e.HasOne<Organization>().WithMany().HasForeignKey(x => x.OrganizationId).OnDelete(DeleteBehavior.Restrict);
     }
 }

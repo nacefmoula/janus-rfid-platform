@@ -40,8 +40,11 @@ public static class ValidationEndpoints
         TimeProvider timeProvider)
     {
         // SEC-02: Identité du terminal déterminée côté serveur par le jeton authentifié
-        var terminalId = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "TERMINAL-DEMO-01";
-        var metrics = new ValidationMetrics(terminalId, Stopwatch.GetTimestamp());
+        var terminalId = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier);
+        // LOT-5A : une borne appartient toujours à une organisation (claim posé par JanusTokenAuthHandler).
+        if (terminalId is null || JanusClaims.GetOrganizationId(user) is not int organizationId)
+            return Results.Json(new { error = "unauthorized", message = "Terminal identity is incomplete." }, statusCode: StatusCodes.Status401Unauthorized);
+        var metrics = new ValidationMetrics(Stopwatch.GetTimestamp());
         var serverNow = timeProvider.GetUtcNow();
 
         if (!ValidationPolicy.IsWellFormed(request.EventId, request.CardUid, request.EventType))
@@ -114,7 +117,9 @@ public static class ValidationEndpoints
 
             ExecuteAsync = async (db, _) =>
             {
-                var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {uid} FOR UPDATE").SingleOrDefaultAsync();
+                // LOT-5A : isolation — seule une carte de l'organisation de la borne est visible (et verrouillée).
+                // Une carte d'une autre organisation est traitée comme inconnue : aucun débit, aucune fuite d'existence.
+                var card = await db.Cards.FromSqlInterpolated($"SELECT * FROM \"Cards\" WHERE \"Uid\" = {uid} AND \"OrganizationId\" = {organizationId} FOR UPDATE").SingleOrDefaultAsync();
 
                 var isPassback = false;
                 if (ValidationPolicy.RequiresPassbackCheck(card?.Status, isApbEnabled))
@@ -133,6 +138,7 @@ public static class ValidationEndpoints
                 {
                     card!.Debit(fareAmount);
                     db.FareTransactions.Add(new FareTransaction {
+                        OrganizationId = card.OrganizationId,
                         CardId = card.Id,
                         CardUid = card.Uid,
                         TerminalId = terminalId,
@@ -143,6 +149,7 @@ public static class ValidationEndpoints
                     });
                     // LOT-3B / FIN-06 : débit inscrit au journal comptable, avec la même clé d'idempotence (terminal, événement)
                     db.WalletLedgerEntries.Add(new WalletLedgerEntry {
+                        OrganizationId = card.OrganizationId,
                         CardId = card.Id,
                         CardUid = card.Uid,
                         EntryType = LedgerEntryTypes.FareDebit,
@@ -155,6 +162,7 @@ public static class ValidationEndpoints
                 }
 
                 var record = new ValidationEvent {
+                    OrganizationId = organizationId,
                     TerminalId = terminalId,
                     EventId = request.EventId,
                     CardUid = uid,
@@ -209,7 +217,7 @@ public static class ValidationEndpoints
                 }
 
                 var reconciledBalance = await db.Cards.AsNoTracking()
-                    .Where(c => c.Uid == uid)
+                    .Where(c => c.Uid == uid && c.OrganizationId == organizationId)
                     .Select(c => (int?)c.BalanceMillimes)
                     .SingleOrDefaultAsync();
 
@@ -224,8 +232,11 @@ public static class ValidationEndpoints
         });
     }
 
-    /// <summary>Enregistrement des métriques d'une validation (labels à cardinalité bornée, jamais d'UID de carte).</summary>
-    private sealed class ValidationMetrics(string terminalId, long startTimestamp)
+    /// <summary>
+    /// Enregistrement des métriques d'une validation. Labels à cardinalité bornée uniquement : jamais d'UID de carte, d'eventId
+    /// ni de code de borne (LOT-5A : le nombre de bornes enrôlées n'est pas borné). Le suivi par borne se fait en SQL (Validations).
+    /// </summary>
+    private sealed class ValidationMetrics(long startTimestamp)
     {
         public void RecordRejectedInvalidRequest() =>
             Record("REJECTED", "INVALID_REQUEST", duplicate: false);
@@ -240,8 +251,7 @@ public static class ValidationEndpoints
             Record(decision.ToString().ToUpperInvariant(), reason, duplicate);
 
         public void RecordDebit(int fareAmount) =>
-            JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount,
-                new KeyValuePair<string, object?>("terminal_id", terminalId));
+            JanusMetrics.FareAmountDebitedMillimesTotal.Add(fareAmount);
 
         private void Record(string decision, string reason, bool duplicate)
         {
@@ -250,7 +260,6 @@ public static class ValidationEndpoints
             JanusMetrics.ValidationsTotal.Add(1,
                 new KeyValuePair<string, object?>("decision", decision),
                 new KeyValuePair<string, object?>("reason", reason),
-                new KeyValuePair<string, object?>("terminal_id", terminalId),
                 new KeyValuePair<string, object?>("duplicate", duplicate ? "true" : "false"));
         }
     }

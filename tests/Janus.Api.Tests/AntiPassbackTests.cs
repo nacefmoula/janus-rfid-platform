@@ -35,6 +35,7 @@ public class AntiPassbackTests : IAsyncLifetime
         using var db = _factory.CreateDbContext();
         var card = new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = uid,
             Status = status,
             Label = $"Test Card {uid}",
@@ -216,7 +217,7 @@ public class AntiPassbackTests : IAsyncLifetime
         var uid = "04DIS" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
         using (var db = disabledFactory.CreateDbContext())
         {
-            db.Cards.Add(new TransitCard { Uid = uid, Status = CardStatus.Active, Label = "Disabled APB", BalanceMillimes = 10000 });
+            db.Cards.Add(new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = uid, Status = CardStatus.Active, Label = "Disabled APB", BalanceMillimes = 10000 });
             await db.SaveChangesAsync();
         }
 

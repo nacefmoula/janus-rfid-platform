@@ -81,6 +81,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var uid = $"04SEC{Guid.NewGuid():N}"[..14].ToUpperInvariant();
         var card = new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = uid,
             Status = CardStatus.Active,
             Label = "Test Runtime Role",
@@ -104,6 +105,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var eventId = Guid.NewGuid();
         var valEvent = new ValidationEvent
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             TerminalId = "TERM-TEST-01",
             EventId = eventId,
             CardUid = uid,
@@ -119,6 +121,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         // Insertion FareTransaction
         var tx = new FareTransaction
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             CardId = fetchedCard.Id,
             CardUid = uid,
             TerminalId = "TERM-TEST-01",
@@ -133,6 +136,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         // Insertion CardAuditLog
         var audit = new CardAuditLog
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             CardUid = uid,
             Action = "TEST_AUDIT",
             PreviousBalanceMillimes = 5000,
@@ -195,6 +199,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var uid = $"04AUD{Guid.NewGuid():N}"[..14].ToUpperInvariant();
         var audit = new CardAuditLog
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             CardUid = uid,
             Action = "INITIAL_LOG",
             NewBalanceMillimes = 1000,
@@ -246,6 +251,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         var uid = $"04TRG{Guid.NewGuid():N}"[..14].ToUpperInvariant();
         var audit = new CardAuditLog
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             CardUid = uid,
             Action = "TRIGGER_TEST",
             NewBalanceMillimes = 2000,
@@ -370,7 +376,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
         using var db = _factory.CreateDbContext();
 
         var uid = $"04DEL{Guid.NewGuid():N}"[..14].ToUpperInvariant();
-        var card = new TransitCard { Uid = uid, Status = CardStatus.Active, Label = "Immutable Card", BalanceMillimes = 1000 };
+        var card = new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = uid, Status = CardStatus.Active, Label = "Immutable Card", BalanceMillimes = 1000 };
         db.Cards.Add(card);
         await db.SaveChangesAsync();
 
@@ -418,7 +424,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
 
         using (var seedDb = _factory.CreateDbContext())
         {
-            seedDb.Cards.Add(new TransitCard { Uid = uid, Status = CardStatus.Active, Label = "Financial Card", BalanceMillimes = 2000 });
+            seedDb.Cards.Add(new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = uid, Status = CardStatus.Active, Label = "Financial Card", BalanceMillimes = 2000 });
             await seedDb.SaveChangesAsync();
         }
 
@@ -471,7 +477,7 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
 
         using (var seedDb = _factory.CreateDbContext())
         {
-            seedDb.Cards.Add(new TransitCard { Uid = uid, Status = CardStatus.Active, Label = "Idempotence Card", BalanceMillimes = 5000 });
+            seedDb.Cards.Add(new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = uid, Status = CardStatus.Active, Label = "Idempotence Card", BalanceMillimes = 5000 });
             await seedDb.SaveChangesAsync();
         }
 
@@ -602,10 +608,11 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
             var tempRtOptions = new DbContextOptionsBuilder<JanusDbContext>().UseNpgsql(tempRtConn).Options;
             await using (var tempRtDb = new JanusDbContext(tempRtOptions))
             {
-                var card = new TransitCard { Uid = "04FRESH001", Status = CardStatus.Active, Label = "Fresh DB Card", BalanceMillimes = 3000 };
+                var card = new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = "04FRESH001", Status = CardStatus.Active, Label = "Fresh DB Card", BalanceMillimes = 3000 };
                 tempRtDb.Cards.Add(card);
                 tempRtDb.CardAuditLogs.Add(new CardAuditLog
                 {
+                    OrganizationId = OrganizationDefaults.DemoOrganizationId,
                     CardUid = "04FRESH001",
                     Action = "FRESH_INIT",
                     NewBalanceMillimes = 3000,
@@ -676,17 +683,12 @@ public class PostgresSecurityTests : IClassFixture<JanusApiFactory>, IAsyncLifet
                 tempRtConn,
                 tempMigConn);
 
-            // 3. Vérifie que les deux triggers (row-level et statement-level) sont de nouveau actifs
-            migrationDb.CardAuditLogs.Add(new CardAuditLog
-            {
-                CardUid = "04DOWNUP01",
-                Action = "MIG_TEST",
-                NewBalanceMillimes = 1000,
-                NewStatus = "Active",
-                Actor = "ADMIN",
-                CreatedAt = DateTimeOffset.UtcNow
-            });
-            await migrationDb.SaveChangesAsync();
+            // 3. Vérifie que les deux triggers (row-level et statement-level) sont de nouveau actifs.
+            // SQL brut : à ce stade le schéma est celui de 2026-10-19 (sans les colonnes ajoutées par les migrations suivantes,
+            // dont OrganizationId au Lot 5A), le modèle EF courant ne peut donc pas être utilisé pour l'insertion.
+            await migrationDb.Database.ExecuteSqlRawAsync(@"
+                INSERT INTO ""CardAuditLogs"" (""CardUid"", ""Action"", ""NewBalanceMillimes"", ""NewStatus"", ""Actor"", ""CreatedAt"")
+                VALUES ('04DOWNUP01', 'MIG_TEST', 1000, 'Active', 'ADMIN', now());");
 
             var updateEx = await Assert.ThrowsAsync<PostgresException>(async () =>
             {

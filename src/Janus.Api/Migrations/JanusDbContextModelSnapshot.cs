@@ -56,6 +56,9 @@ namespace Janus.Api.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("PreviousBalanceMillimes")
                         .HasColumnType("integer");
 
@@ -71,50 +74,9 @@ namespace Janus.Api.Migrations
 
                     b.HasIndex("CardUid");
 
-                    b.ToTable("CardAuditLogs");
-                });
+                    b.HasIndex("OrganizationId");
 
-            modelBuilder.Entity("Janus.Domain.Wallet.FareTransaction", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<int>("AmountMillimes")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("BalanceAfterMillimes")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("CardId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("CardUid")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("EventId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TerminalId")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CardId");
-
-                    b.HasIndex("TerminalId", "EventId")
-                        .IsUnique();
-
-                    b.ToTable("FareTransactions");
+                    b.ToTable("CardAuditLogs", (string)null);
                 });
 
             modelBuilder.Entity("Janus.Domain.Cards.TransitCard", b =>
@@ -135,6 +97,9 @@ namespace Janus.Api.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
@@ -145,12 +110,182 @@ namespace Janus.Api.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("Id", "OrganizationId")
+                        .HasName("AK_Cards_Id_OrganizationId");
+
+                    b.HasIndex("OrganizationId");
+
                     b.HasIndex("Uid")
                         .IsUnique();
 
-                    b.ToTable("Cards", t =>
+                    b.ToTable("Cards", null, t =>
                         {
                             t.HasCheckConstraint("CK_Cards_BalanceMillimes_NonNegative", "\"BalanceMillimes\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Janus.Domain.Organizations.Organization", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("Organizations", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Organizations_Code", "\"Code\" ~ '^[A-Z0-9][A-Z0-9-]{1,31}$'");
+
+                            t.HasCheckConstraint("CK_Organizations_Status", "\"Status\" IN (0, 1)");
+                        });
+                });
+
+            modelBuilder.Entity("Janus.Domain.Terminals.Terminal", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RevocationReason")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevokedBy")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("Terminals", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Terminals_Code", "\"Code\" ~ '^[A-Z0-9][A-Z0-9-]{2,79}$'");
+
+                            t.HasCheckConstraint("CK_Terminals_ExpiresAfterCreation", "\"ExpiresAt\" > \"CreatedAt\"");
+
+                            t.HasCheckConstraint("CK_Terminals_RevocationConsistency", "(\"Status\" = 0 AND \"RevokedAt\" IS NULL AND \"RevokedBy\" IS NULL AND \"RevocationReason\" IS NULL) OR (\"Status\" = 1 AND \"RevokedAt\" IS NOT NULL AND \"RevokedBy\" IS NOT NULL AND \"RevocationReason\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_Terminals_Status", "\"Status\" IN (0, 1)");
+
+                            t.HasCheckConstraint("CK_Terminals_TokenHash", "\"TokenHash\" ~ '^[0-9A-F]{64}$'");
+                        });
+                });
+
+            modelBuilder.Entity("Janus.Domain.Terminals.TerminalAuditLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("TerminalCode")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("TerminalId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("TokenExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("TerminalId", "Id");
+
+                    b.ToTable("TerminalAuditLogs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_TerminalAuditLogs_Action", "\"Action\" IN ('TERMINAL_ENROLLED', 'TERMINAL_REVOKED')");
+
+                            t.HasCheckConstraint("CK_TerminalAuditLogs_RevocationReason", "\"Action\" <> 'TERMINAL_REVOKED' OR \"Reason\" IS NOT NULL");
                         });
                 });
 
@@ -181,6 +316,9 @@ namespace Janus.Api.Migrations
                     b.Property<DateTimeOffset?>("OccurredAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PayloadHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -201,12 +339,64 @@ namespace Janus.Api.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("OrganizationId");
+
                     b.HasIndex("TerminalId", "EventId")
                         .IsUnique();
 
                     b.HasIndex("TerminalId", "CardUid", "Decision", "ReceivedAt");
 
-                    b.ToTable("Validations");
+                    b.ToTable("Validations", (string)null);
+                });
+
+            modelBuilder.Entity("Janus.Domain.Wallet.FareTransaction", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("AmountMillimes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("BalanceAfterMillimes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("CardId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("CardUid")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TerminalId")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CardId");
+
+                    b.HasIndex("OrganizationId");
+
+                    b.HasIndex("CardId", "OrganizationId");
+
+                    b.HasIndex("TerminalId", "EventId")
+                        .IsUnique();
+
+                    b.ToTable("FareTransactions", (string)null);
                 });
 
             modelBuilder.Entity("Janus.Domain.Wallet.WalletLedgerEntry", b =>
@@ -249,6 +439,9 @@ namespace Janus.Api.Migrations
                         .HasMaxLength(160)
                         .HasColumnType("character varying(160)");
 
+                    b.Property<int>("OrganizationId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Reason")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -258,9 +451,13 @@ namespace Janus.Api.Migrations
                     b.HasIndex("IdempotencyKey")
                         .IsUnique();
 
+                    b.HasIndex("OrganizationId");
+
                     b.HasIndex("CardId", "Id");
 
-                    b.ToTable("WalletLedgerEntries", t =>
+                    b.HasIndex("CardId", "OrganizationId");
+
+                    b.ToTable("WalletLedgerEntries", null, t =>
                         {
                             t.HasCheckConstraint("CK_WalletLedgerEntries_AmountNonZero", "\"AmountMillimes\" <> 0");
 
@@ -270,6 +467,57 @@ namespace Janus.Api.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Janus.Domain.Cards.CardAuditLog", b =>
+                {
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Janus.Domain.Cards.TransitCard", b =>
+                {
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Janus.Domain.Terminals.Terminal", b =>
+                {
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Janus.Domain.Terminals.TerminalAuditLog", b =>
+                {
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Janus.Domain.Terminals.Terminal", null)
+                        .WithMany()
+                        .HasForeignKey("TerminalId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Janus.Domain.Validations.ValidationEvent", b =>
+                {
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Janus.Domain.Wallet.FareTransaction", b =>
                 {
                     b.HasOne("Janus.Domain.Cards.TransitCard", "Card")
@@ -277,6 +525,20 @@ namespace Janus.Api.Migrations
                         .HasForeignKey("CardId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Janus.Domain.Cards.TransitCard", null)
+                        .WithMany()
+                        .HasForeignKey("CardId", "OrganizationId")
+                        .HasPrincipalKey("Id", "OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_FareTransactions_Cards_CardId_OrganizationId");
 
                     b.Navigation("Card");
                 });
@@ -288,6 +550,20 @@ namespace Janus.Api.Migrations
                         .HasForeignKey("CardId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("Janus.Domain.Organizations.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Janus.Domain.Cards.TransitCard", null)
+                        .WithMany()
+                        .HasForeignKey("CardId", "OrganizationId")
+                        .HasPrincipalKey("Id", "OrganizationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_WalletLedgerEntries_Cards_CardId_OrganizationId");
 
                     b.Navigation("Card");
                 });

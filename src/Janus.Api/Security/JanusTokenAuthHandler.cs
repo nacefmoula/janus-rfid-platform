@@ -1,4 +1,8 @@
+using Janus.Api.Infrastructure.Persistence;
 using Janus.Api.Observability;
+using Janus.Domain.Terminals;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,34 +16,56 @@ using Microsoft.Extensions.Options;
 
 namespace Janus.Api.Security;
 
+/// <summary>
+/// Authentification Bearer. Administrateur et collecteur de métriques : jetons de configuration comparés en temps constant.
+/// Bornes (Lot 5A) : jeton opaque recherché par son empreinte SHA-256 dans <c>Terminals</c> (aucun cache : une révocation
+/// est effective dès son COMMIT), puis règle <see cref="TerminalAccessPolicy"/> (révocation, expiration, organisation suspendue).
+/// L'authentification a lieu avant la transaction financière : une requête authentifiée juste avant une révocation peut encore aboutir.
+/// </summary>
 public class JanusTokenAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
     public const string SchemeName = "JanusToken";
     public const string AuthFailureRecordedItemKey = "JanusAuthFailureRecorded";
 
     private readonly IConfiguration _configuration;
+    private readonly TimeProvider _timeProvider;
 
     public JanusTokenAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        TimeProvider timeProvider)
         : base(options, logger, encoder)
     {
         _configuration = configuration;
+        _timeProvider = timeProvider;
     }
 
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        var staticResult = AuthenticateStaticOrRejectMalformed(out var suppliedToken);
+        if (staticResult is not null)
+        {
+            return staticResult;
+        }
+
+        return await AuthenticateTerminalAsync(suppliedToken!);
+    }
+
+    private AuthenticateResult? AuthenticateStaticOrRejectMalformed(out string? suppliedToken)
+    {
+        suppliedToken = null;
+
         if (!Request.Headers.TryGetValue("Authorization", out var authHeaderValues))
         {
-            return Task.FromResult(AuthenticateResult.NoResult());
+            return AuthenticateResult.NoResult();
         }
 
         var rawHeader = authHeaderValues.ToString();
         if (string.IsNullOrWhiteSpace(rawHeader))
         {
-            return Task.FromResult(AuthenticateResult.NoResult());
+            return AuthenticateResult.NoResult();
         }
 
         var trimmedHeader = rawHeader.Trim();
@@ -49,51 +75,33 @@ public class JanusTokenAuthHandler : AuthenticationHandler<AuthenticationSchemeO
         if (trimmedHeader.Equals("Bearer", StringComparison.OrdinalIgnoreCase))
         {
             RecordAuthFailure(normalizedEndpoint, "malformed_header", "empty Bearer token");
-            return Task.FromResult(AuthenticateResult.Fail("Malformed Authorization header: empty Bearer token."));
+            return AuthenticateResult.Fail("Malformed Authorization header: empty Bearer token.");
         }
 
         // Cas 2 : Schéma d'authentification autre que Bearer (ex: Basic, Digest...)
         if (!trimmedHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             RecordAuthFailure(normalizedEndpoint, "non_bearer", "unsupported authentication scheme");
-            return Task.FromResult(AuthenticateResult.Fail("Unsupported authentication scheme. Bearer token required."));
+            return AuthenticateResult.Fail("Unsupported authentication scheme. Bearer token required.");
         }
 
         // Cas 3 : Préfixe "Bearer " présent mais jeton vide ou contenant des espaces internes
-        var suppliedToken = trimmedHeader[7..].Trim();
+        suppliedToken = trimmedHeader[7..].Trim();
         if (string.IsNullOrEmpty(suppliedToken) || suppliedToken.Any(char.IsWhiteSpace))
         {
             RecordAuthFailure(normalizedEndpoint, "malformed_header", "malformed or empty Bearer token value");
-            return Task.FromResult(AuthenticateResult.Fail("Malformed Bearer token."));
+            return AuthenticateResult.Fail("Malformed Bearer token.");
         }
 
-        var terminalExpected = _configuration["TerminalAuth:DemoToken"];
-        var terminal2Expected = _configuration["TerminalAuth:Terminal2Token"];
         var adminExpected = _configuration["AdminAuth:DemoToken"];
         var scrapeExpected = _configuration["MetricsAuth:ScrapeToken"];
-
-        // 1. Terminal 1
-        if (CheckToken(suppliedToken, terminalExpected))
-        {
-            var principal = CreatePrincipal("TERMINAL-DEMO-01", "Terminal", ["validations:create", "cards:read"]);
-            var ticket = new AuthenticationTicket(principal, SchemeName);
-            return Task.FromResult(AuthenticateResult.Success(ticket));
-        }
-
-        // 2. Terminal 2
-        if (CheckToken(suppliedToken, terminal2Expected))
-        {
-            var principal = CreatePrincipal("TERMINAL-DEMO-02", "Terminal", ["validations:create", "cards:read"]);
-            var ticket = new AuthenticationTicket(principal, SchemeName);
-            return Task.FromResult(AuthenticateResult.Success(ticket));
-        }
 
         // 3. Admin
         if (CheckToken(suppliedToken, adminExpected))
         {
             var principal = CreatePrincipal("ADMIN", "Admin", ["cards:admin", "cards:read", "audit:read", "metrics:scrape", "demo:read", "dashboard:read"]);
             var ticket = new AuthenticationTicket(principal, SchemeName);
-            return Task.FromResult(AuthenticateResult.Success(ticket));
+            return AuthenticateResult.Success(ticket);
         }
 
         // 4. Prometheus Scraper dédié (droits minimaux strictement limités à metrics:scrape)
@@ -101,12 +109,52 @@ public class JanusTokenAuthHandler : AuthenticationHandler<AuthenticationSchemeO
         {
             var principal = CreatePrincipal("PROMETHEUS-SCRAPER", "Scraper", ["metrics:scrape"]);
             var ticket = new AuthenticationTicket(principal, SchemeName);
-            return Task.FromResult(AuthenticateResult.Success(ticket));
+            return AuthenticateResult.Success(ticket);
         }
 
+        // Bornes : résolution en base (voir AuthenticateTerminalAsync)
+        return null;
+    }
+
+    private async Task<AuthenticateResult> AuthenticateTerminalAsync(string suppliedToken)
+    {
+        var normalizedEndpoint = SecurityPathHelper.NormalizeEndpoint(Request.Path);
+        var tokenHash = TerminalToken.ComputeHash(suppliedToken);
+        var db = Context.RequestServices.GetRequiredService<JanusDbContext>();
+
+        var terminal = await db.Terminals.AsNoTracking()
+            .Where(t => t.TokenHash == tokenHash)
+            .Join(db.Organizations, t => t.OrganizationId, o => o.Id, (t, o) => new
+            {
+                t.Code,
+                t.OrganizationId,
+                OrganizationCode = o.Code,
+                t.Status,
+                t.ExpiresAt,
+                OrganizationStatus = o.Status
+            })
+            .SingleOrDefaultAsync(Context.RequestAborted);
+
         // Cas 4 : Jeton Bearer inconnu / invalide
-        RecordAuthFailure(normalizedEndpoint, "invalid_token", "invalid token");
-        return Task.FromResult(AuthenticateResult.Fail("Invalid authentication token."));
+        if (terminal is null)
+        {
+            RecordAuthFailure(normalizedEndpoint, "invalid_token", "invalid token");
+            return AuthenticateResult.Fail("Invalid authentication token.");
+        }
+
+        var decision = TerminalAccessPolicy.Evaluate(terminal.Status, terminal.ExpiresAt, terminal.OrganizationStatus, _timeProvider.GetUtcNow());
+        if (TerminalAccessPolicy.ToFailureReason(decision) is { } reason)
+        {
+            // Raison bornée (liste fermée) ; le code de la borne n'apparaît que dans le journal, jamais dans les métriques.
+            RecordAuthFailure(normalizedEndpoint, reason, $"terminal access refused ({terminal.Code})");
+            return AuthenticateResult.Fail("Terminal access refused.");
+        }
+
+        var principal = CreatePrincipal(terminal.Code, "Terminal", ["validations:create", "cards:read"]);
+        var identity = (ClaimsIdentity)principal.Identity!;
+        identity.AddClaim(new Claim(JanusClaims.OrganizationId, terminal.OrganizationId.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        identity.AddClaim(new Claim(JanusClaims.OrganizationCode, terminal.OrganizationCode));
+        return AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName));
     }
 
     private void RecordAuthFailure(string normalizedEndpoint, string reason, string logDetail)

@@ -1,4 +1,5 @@
 using Janus.Domain.Cards;
+using Janus.Domain.Organizations;
 using Janus.Domain.Wallet;
 using Microsoft.EntityFrameworkCore;
 
@@ -21,8 +22,8 @@ public static class DemoDataSeeder
 
         var demoCards = new[]
         {
-            new TransitCard { Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
-            new TransitCard { Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
+            new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = "04A1B2C3D4E5F6", Status = CardStatus.Active, Label = "Carte démo active", BalanceMillimes = 10000 },
+            new TransitCard { OrganizationId = OrganizationDefaults.DemoOrganizationId, Uid = "04DEAD00000001", Status = CardStatus.Revoked, Label = "Carte démo révoquée", BalanceMillimes = 5000 }
         };
 
         db.Cards.AddRange(demoCards);
@@ -30,6 +31,7 @@ public static class DemoDataSeeder
         {
             db.WalletLedgerEntries.Add(new WalletLedgerEntry
             {
+                OrganizationId = card.OrganizationId,
                 Card = card,
                 CardUid = card.Uid,
                 EntryType = LedgerEntryTypes.OpeningBalance,

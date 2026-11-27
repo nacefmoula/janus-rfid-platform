@@ -36,6 +36,7 @@ public class PaginationTests : IAsyncLifetime
             uids.Add(uid);
             db.Cards.Add(new TransitCard
             {
+                OrganizationId = OrganizationDefaults.DemoOrganizationId,
                 Uid = uid,
                 Label = $"Batch User {prefix} {i}",
                 Status = status,
@@ -52,6 +53,7 @@ public class PaginationTests : IAsyncLifetime
         using var db = _factory.CreateDbContext();
         var card = new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = uid,
             Label = $"Card for Audit {prefix}",
             Status = CardStatus.Active,
@@ -64,6 +66,7 @@ public class PaginationTests : IAsyncLifetime
         {
             db.CardAuditLogs.Add(new CardAuditLog
             {
+                OrganizationId = OrganizationDefaults.DemoOrganizationId,
                 CardUid = uid,
                 Action = i == 1 ? "ADMIN_CARD_CREATED" : "ADMIN_CARD_UPDATED",
                 PreviousBalanceMillimes = i == 1 ? null : (i - 1) * 1000,
@@ -302,6 +305,7 @@ public class PaginationTests : IAsyncLifetime
         using var db = _factory.CreateDbContext();
         db.Cards.Add(new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = cardUid,
             Label = "Test Identical Timestamp",
             Status = CardStatus.Active,
@@ -310,9 +314,9 @@ public class PaginationTests : IAsyncLifetime
 
         // 3 événements à la même seconde exacte
         db.CardAuditLogs.AddRange(
-            new CardAuditLog { CardUid = cardUid, Action = "ADMIN_CARD_CREATED", NewBalanceMillimes = 5000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant },
-            new CardAuditLog { CardUid = cardUid, Action = "ADMIN_CARD_UPDATED", NewBalanceMillimes = 6000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant },
-            new CardAuditLog { CardUid = cardUid, Action = "ADMIN_CARD_UPDATED", NewBalanceMillimes = 7000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant }
+            new CardAuditLog { OrganizationId = OrganizationDefaults.DemoOrganizationId, CardUid = cardUid, Action = "ADMIN_CARD_CREATED", NewBalanceMillimes = 5000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant },
+            new CardAuditLog { OrganizationId = OrganizationDefaults.DemoOrganizationId, CardUid = cardUid, Action = "ADMIN_CARD_UPDATED", NewBalanceMillimes = 6000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant },
+            new CardAuditLog { OrganizationId = OrganizationDefaults.DemoOrganizationId, CardUid = cardUid, Action = "ADMIN_CARD_UPDATED", NewBalanceMillimes = 7000, NewStatus = "Active", Actor = "ADMIN", CreatedAt = sameInstant }
         );
         await db.SaveChangesAsync();
 

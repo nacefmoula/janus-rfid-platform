@@ -19,6 +19,8 @@
     <Using Include="Janus.Domain.Cards" />
     <Using Include="Janus.Domain.Validations" />
     <Using Include="Janus.Domain.Wallet" />
+    <Using Include="Janus.Domain.Organizations" />
+    <Using Include="Janus.Domain.Terminals" />
     <Using Include="Janus.Api.Infrastructure.Persistence" />
     <Using Include="Janus.Api.Observability" />
     <Using Include="Janus.Api.Features.Validations" />

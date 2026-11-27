@@ -5,6 +5,8 @@ public sealed class TransitCard
 {
     /// <summary>Identifiant technique.</summary>
     public int Id { get; set; }
+    /// <summary>Organisation propriétaire (immuable, isolation multi-organisation).</summary>
+    public int OrganizationId { get; set; }
     /// <summary>UID normalisé (majuscules, sans espaces).</summary>
     public required string Uid { get; set; }
     /// <summary>Statut d'exploitation.</summary>

@@ -38,6 +38,12 @@ if (migrationExitCode is int exitCode)
     return exitCode;
 }
 
+// LOT-5A : bornes de démonstration enrôlées par empreinte de jeton (Development uniquement) ; arrêt explicite si incohérence.
+if (await DemoTerminalEnrollment.RunAsync(app) is int enrollmentExitCode)
+{
+    return enrollmentExitCode;
+}
+
 app.MapJanusEndpoints(app.Environment, app.Configuration);
 
 await app.RunAsync();

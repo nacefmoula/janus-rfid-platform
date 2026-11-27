@@ -40,6 +40,7 @@ public class SecurityHardeningTests : IAsyncLifetime
         using var db = _factory.CreateDbContext();
         var card = new TransitCard
         {
+            OrganizationId = OrganizationDefaults.DemoOrganizationId,
             Uid = uid,
             Status = status,
             Label = $"Test Sec Card {uid}",
@@ -659,50 +660,41 @@ public class SecurityHardeningTests : IAsyncLifetime
     }
 
     [Fact]
-    public void FIN04_StartupValidation_RejectsMissingOrDefaultTerminal2Token_InProductionAndStaging()
+    public void FIN04_StartupValidation_InProductionAndStaging_NoLongerRequiresStaticTerminalTokens()
     {
-        var strongTerm1 = "prod-term1-" + Guid.NewGuid().ToString("N");
+        // LOT-5A : hors Development, les bornes s'authentifient uniquement par des jetons enrôlés en base (empreintes) ;
+        // TerminalAuth:* n'est plus utilisé, donc ni exigé ni contrôlé. Le jeton administrateur reste obligatoire.
         var strongAdmin = "prod-admin-" + Guid.NewGuid().ToString("N");
         var strongScrape = "prod-scrape-" + Guid.NewGuid().ToString("N");
 
-        // Case 1: Missing/empty Terminal2Token in Production throws configuration error
-        using var missingTerm2Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        foreach (var environment in new[] { "Production", "Staging" })
         {
-            builder.UseEnvironment("Production");
-            builder.ConfigureAppConfiguration((_, config) =>
+            using var noTerminalTokensFactory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
+                builder.UseEnvironment(environment);
+                builder.ConfigureAppConfiguration((_, config) =>
                 {
-                    ["ConnectionStrings:JanusDb"] = "Host=localhost;Database=dummy",
-                    ["TerminalAuth:DemoToken"] = strongTerm1,
-                    ["TerminalAuth:Terminal2Token"] = "",
-                    ["AdminAuth:DemoToken"] = strongAdmin,
-                    ["MetricsAuth:ScrapeToken"] = strongScrape
+                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Database:SkipMigration"] = "true",
+                        ["ConnectionStrings:JanusDb"] = new Npgsql.NpgsqlConnectionStringBuilder
+                        {
+                            Host = "localhost", Port = 5433, Database = "janus_db", Username = "janus_runtime",
+                            Password = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24))
+                        }.ConnectionString,
+                        ["ConnectionStrings:MigrationDb"] = "",
+                        ["TerminalAuth:DemoToken"] = "",
+                        ["TerminalAuth:Terminal2Token"] = "dev-terminal-02-token-change-me",
+                        ["AdminAuth:DemoToken"] = strongAdmin,
+                        ["MetricsAuth:ScrapeToken"] = strongScrape,
+                        ["Fare:AmountMillimes"] = "1500"
+                    });
                 });
             });
-        });
-        var exMissing = Assert.ThrowsAny<Exception>(() => missingTerm2Factory.CreateClient());
-        Assert.Contains("TerminalAuth:Terminal2Token", exMissing.ToString());
 
-        // Case 2: Default dev Terminal2Token in Staging throws configuration error without leaking value
-        using var defaultTerm2Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Staging");
-            builder.ConfigureAppConfiguration((_, config) =>
-            {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["ConnectionStrings:JanusDb"] = "Host=localhost;Database=dummy",
-                    ["TerminalAuth:DemoToken"] = strongTerm1,
-                    ["TerminalAuth:Terminal2Token"] = "dev-terminal-02-token-change-me",
-                    ["AdminAuth:DemoToken"] = strongAdmin,
-                    ["MetricsAuth:ScrapeToken"] = strongScrape
-                });
-            });
-        });
-        var exDefault = Assert.ThrowsAny<Exception>(() => defaultTerm2Factory.CreateClient());
-        Assert.Contains("TerminalAuth:Terminal2Token", exDefault.ToString());
-        Assert.DoesNotContain("dev-terminal-02-token-change-me", exDefault.Message);
+            using var client = noTerminalTokensFactory.CreateClient();
+            Assert.NotNull(client);
+        }
     }
 
     [Fact]

@@ -6,6 +6,7 @@ using Janus.Api.Observability;
 using Janus.Api.Security;
 using Janus.Domain;
 using Janus.Domain.Cards;
+using Janus.Domain.Organizations;
 using Janus.Domain.Wallet;
 
 namespace Janus.Api.Features.Cards;
@@ -237,6 +238,7 @@ public static class CardsEndpoints
         ClaimsPrincipal user,
         FinancialTransactionRunner runner,
         TimeProvider timeProvider,
+        IHostEnvironment environment,
         ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger(typeof(CardsEndpoints));
@@ -268,6 +270,11 @@ public static class CardsEndpoints
                 return Results.BadRequest(new { error = "invalid_status", message = "Status must be 'Active' or 'Revoked'." });
         }
 
+        // LOT-5A : organisation émettrice (format validé avant toute transaction).
+        var requestedOrganizationCode = OrganizationCodes.Normalize(request.OrganizationCode);
+        if (requestedOrganizationCode is not null && !OrganizationCodes.IsValidOrganizationCode(requestedOrganizationCode))
+            return Results.BadRequest(new { error = "invalid_organization_code", message = "Invalid organization code." });
+
         var normalized = uid.Trim().ToUpperInvariant();
         var actor = user.Identity?.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "ADMIN";
 
@@ -284,6 +291,35 @@ public static class CardsEndpoints
                 // la transaction complète afin de verrouiller (SELECT ... FOR UPDATE) la carte créée par le concurrent et d'enregistrer
                 // la seconde opération comme ADMIN_CARD_UPDATED avec PreviousBalance exact.
                 attempt.RetryOnceOnUniqueViolation = card is null;
+
+                // LOT-5A : résolution de l'organisation. Une carte existante ne change jamais d'organisation.
+                int organizationId;
+                if (card is null)
+                {
+                    var (creationCode, rejection) = CardOrganizationPolicy.ResolveForCreation(requestedOrganizationCode, environment.IsDevelopment());
+                    if (rejection == CardOrganizationRejection.OrganizationRequired)
+                        return FinancialStep.Abort(Results.BadRequest(new { error = "organization_required", message = "organizationCode is required to create a card." }));
+
+                    var resolvedId = await db.Organizations.AsNoTracking().Where(o => o.Code == creationCode).Select(o => (int?)o.Id).SingleOrDefaultAsync();
+                    if (resolvedId is not int createdIn)
+                        return FinancialStep.Abort(Results.NotFound(new { error = "organization_not_found" }));
+                    organizationId = createdIn;
+                }
+                else
+                {
+                    int? requestedOrganizationId = null;
+                    if (requestedOrganizationCode is not null)
+                    {
+                        requestedOrganizationId = await db.Organizations.AsNoTracking().Where(o => o.Code == requestedOrganizationCode).Select(o => (int?)o.Id).SingleOrDefaultAsync();
+                        if (requestedOrganizationId is null)
+                            return FinancialStep.Abort(Results.NotFound(new { error = "organization_not_found" }));
+                    }
+
+                    // Note 5B : avec des opérateurs par organisation, cette réponse ne devra pas révéler l'existence de la carte ailleurs.
+                    if (CardOrganizationPolicy.ValidateForExistingCard(requestedOrganizationId, card.OrganizationId) == CardOrganizationRejection.OrganizationMismatch)
+                        return FinancialStep.Abort(Results.Conflict(new { error = "organization_mismatch", message = "A card never changes organization." }));
+                    organizationId = card.OrganizationId;
+                }
 
                 // LOT-3D / FIN-10 : une modification absolue du solde d'une carte existante exige la garde optimiste.
                 // Sans elle, le serveur ne peut pas distinguer une correction volontaire d'un écrasement accidentel (lecture périmée).
@@ -331,6 +367,7 @@ public static class CardsEndpoints
                 {
                     var openingBalance = request.BalanceMillimes ?? 0;
                     card = new TransitCard {
+                        OrganizationId = organizationId,
                         Uid = normalized,
                         Status = targetStatus,
                         Label = request.Label ?? $"Card {normalized}",
@@ -355,6 +392,7 @@ public static class CardsEndpoints
                 if (balanceDelta != 0)
                 {
                     db.WalletLedgerEntries.Add(new WalletLedgerEntry {
+                        OrganizationId = organizationId,
                         Card = card,
                         CardUid = normalized,
                         EntryType = ledgerEntryType,
@@ -369,6 +407,7 @@ public static class CardsEndpoints
 
                 // Traçabilité d'audit avec identité réelle persistée (SEC-06)
                 db.CardAuditLogs.Add(new CardAuditLog {
+                    OrganizationId = organizationId,
                     CardUid = normalized,
                     Action = action,
                     PreviousBalanceMillimes = prevBalance,

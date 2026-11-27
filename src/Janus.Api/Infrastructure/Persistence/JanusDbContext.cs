@@ -1,4 +1,6 @@
 using Janus.Domain.Cards;
+using Janus.Domain.Organizations;
+using Janus.Domain.Terminals;
 using Janus.Domain.Validations;
 using Janus.Domain.Wallet;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +20,12 @@ public sealed class JanusDbContext(DbContextOptions<JanusDbContext> options) : D
     public DbSet<CardAuditLog> CardAuditLogs => Set<CardAuditLog>();
     /// <summary>Journal comptable append-only.</summary>
     public DbSet<WalletLedgerEntry> WalletLedgerEntries => Set<WalletLedgerEntry>();
+    /// <summary>Organisations clientes.</summary>
+    public DbSet<Organization> Organizations => Set<Organization>();
+    /// <summary>Bornes enrôlées (empreinte du jeton uniquement).</summary>
+    public DbSet<Terminal> Terminals => Set<Terminal>();
+    /// <summary>Audit append-only des bornes.</summary>
+    public DbSet<TerminalAuditLog> TerminalAuditLogs => Set<TerminalAuditLog>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
