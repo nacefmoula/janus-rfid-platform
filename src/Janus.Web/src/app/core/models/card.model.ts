@@ -36,6 +36,11 @@ export interface CardUpsertRequest {
   status?: CardStatus | string;
   label?: string;
   reason?: string;
+  /**
+   * Garde de concurrence optimiste (LOT-3B) : solde sur lequel l'administrateur s'est basé.
+   * Le serveur répond 409 `stale_balance` si le solde a changé depuis (ex. débit d'un terminal).
+   */
+  expectedBalanceMillimes?: number;
 }
 
 export interface CardAuditLog {

@@ -49,6 +49,8 @@ export class CardsComponent implements OnInit, OnDestroy {
   targetCardUid = '';
   editLabel = '';
   editBalanceMillimes = 0;
+  /** Solde lu à l'ouverture de la modale, transmis au serveur comme garde de concurrence optimiste. */
+  editExpectedBalanceMillimes: number | undefined = undefined;
   editStatus: CardStatus = 'Active';
   editReason = '';
 
@@ -365,6 +367,7 @@ export class CardsComponent implements OnInit, OnDestroy {
     this.selectedCardForEdit.set(card);
     this.editLabel = card.label || '';
     this.editBalanceMillimes = card.balanceMillimes ?? 0;
+    this.editExpectedBalanceMillimes = card.balanceMillimes ?? undefined;
     this.editStatus = (card.status as CardStatus) || 'Active';
     this.editReason = '';
     this.modalErrorMessage.set(null);
@@ -426,7 +429,8 @@ export class CardsComponent implements OnInit, OnDestroy {
       label: this.editLabel.trim() || undefined,
       balanceMillimes: this.editBalanceMillimes,
       status: this.editStatus,
-      reason: this.editReason.trim()
+      reason: this.editReason.trim(),
+      ...(this.editExpectedBalanceMillimes !== undefined ? { expectedBalanceMillimes: this.editExpectedBalanceMillimes } : {})
     };
 
     this.updateSub = this.api.upsertCard(this.targetCardUid, body).subscribe({
@@ -449,9 +453,19 @@ export class CardsComponent implements OnInit, OnDestroy {
           this.openCardDetail(updatedCard);
         }
       },
-      error: () => {
+      error: (err: { status?: number; error?: { error?: string; currentBalanceMillimes?: number } }) => {
         if (this.session.sessionVersion() !== expectedVersion) return;
         this.isSubmitting.set(false);
+        if (err?.status === 409 && err.error?.error === 'stale_balance') {
+          // Un mouvement (ex. validation terminal) a modifié le solde pendant l'édition : on ne l'écrase jamais.
+          const current = err.error.currentBalanceMillimes;
+          if (typeof current === 'number') {
+            this.editExpectedBalanceMillimes = current;
+            this.editBalanceMillimes = current;
+          }
+          this.modalErrorMessage.set('Le solde de la carte a changé pendant votre saisie (validation en cours ?). Le solde actuel a été rechargé : vérifiez le montant puis validez à nouveau.');
+          return;
+        }
         this.modalErrorMessage.set('Échec de la mise à jour de la carte. Vérifiez vos droits administrateur ou la validité des données.');
       }
     });
