@@ -278,10 +278,7 @@ builder.Services.AddOpenTelemetry()
 var app = builder.Build();
 
 // Validation centralisée de la configuration au démarrage (SEC-03 / REV-01 / REV-05 / REV-07)
-var startupFareConfig = app.Configuration["Fare:AmountMillimes"];
-if (!string.IsNullOrEmpty(startupFareConfig) && (!int.TryParse(startupFareConfig, out var startupFare) || startupFare <= 0))
-    throw new InvalidOperationException($"Invalid Fare:AmountMillimes '{startupFareConfig}'. Must be a strictly positive integer.");
-
+// Le tarif (Fare:AmountMillimes) est validé plus bas, après les contrôles de sécurité, car il n'est pas requis en mode MigrateOnly.
 var startupApbWindow = app.Configuration["AntiPassback:WindowSeconds"];
 if (!string.IsNullOrEmpty(startupApbWindow)) {
     if (!int.TryParse(startupApbWindow, out var startupWindow) || startupWindow <= 0)
@@ -350,6 +347,16 @@ if (!isDev)
         app.Configuration.GetConnectionString("JanusDb"),
         app.Configuration.GetConnectionString("MigrationDb"),
         skipMigrationConfig && !migrateOnlyConfig);
+}
+
+// LOT-3A / FIN-05 : le tarif est une donnée financière obligatoire pour servir des validations.
+// Fail-fast au démarrage plutôt qu'une API "vivante" qui renverrait 500 sur chaque validation.
+// Aucune valeur par défaut implicite dans le code : le montant facturé doit toujours être un choix explicite d'exploitation.
+if (!migrateOnlyConfig)
+{
+    var startupFareConfig = app.Configuration["Fare:AmountMillimes"];
+    if (!int.TryParse(startupFareConfig, out var startupFare) || startupFare <= 0)
+        throw new InvalidOperationException("Configuration error: 'Fare:AmountMillimes' must be configured with a strictly positive integer amount in millimes.");
 }
 
 // JANUS-SEC-009: Gestionnaire d'exception global retournant une réponse JSON standardisée avec traceId et masquant les piles d'appels internes
@@ -660,7 +667,7 @@ app.MapGet("/api/simulator/cards/{uid}/presence", async (string uid, JanusDbCont
     .RequireRateLimiting("CardsReadPolicy");
 
 // REV-02 / FIN-03: Endpoint métier synthétique pour le dashboard (agrégats SQL regroupés + compteur mémoire explicite pour les rejets 409 non persistés en base)
-app.MapGet("/api/dashboard/summary", async (JanusDbContext db) => {
+app.MapGet("/api/dashboard/summary", async (JanusDbContext db, TimeProvider timeProvider) => {
     var validationCounts = await db.Validations.AsNoTracking()
         .GroupBy(v => v.Decision)
         .Select(g => new { Decision = g.Key, Count = g.Count() })
@@ -688,13 +695,16 @@ app.MapGet("/api/dashboard/summary", async (JanusDbContext db) => {
         revokedCardsCount,
         totalCardsCount = activeCardsCount + revokedCardsCount,
         totalCirculatingBalanceMillimes,
-        scrapedAt = DateTimeOffset.UtcNow
+        scrapedAt = timeProvider.GetUtcNow()
     });
 })
     .RequireAuthorization("DashboardRead")
     .RequireRateLimiting("CardsReadPolicy");
 
 app.MapGet("/api/cards/{uid}", async (string uid, HttpRequest http, JanusDbContext db) => {
+    if (string.IsNullOrWhiteSpace(uid) || uid.Length > JanusSchemaLimits.CardUidMaxLength)
+        return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
+
     var normalized = uid.Trim().ToUpperInvariant();
     var card = await db.Cards.AsNoTracking().SingleOrDefaultAsync(c => c.Uid == normalized);
     if (card is null) return Results.NotFound(new { error = "card_not_found" });
@@ -815,12 +825,20 @@ app.MapGet("/api/cards/{uid}/audit", async (string uid, HttpRequest http, JanusD
     });
 }).RequireAuthorization("AuditRead").RequireRateLimiting("AdminPolicy");
 
-app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, ClaimsPrincipal user, IConfiguration config, IServiceScopeFactory scopeFactory, ILogger<Program> logger) => {
-    if (string.IsNullOrWhiteSpace(uid) || uid.Length > 64)
+app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, ClaimsPrincipal user, IConfiguration config, IServiceScopeFactory scopeFactory, TimeProvider timeProvider, ILogger<Program> logger) => {
+    if (string.IsNullOrWhiteSpace(uid) || uid.Length > JanusSchemaLimits.CardUidMaxLength)
         return Results.BadRequest(new { error = "invalid_uid", message = "Valid card UID is required." });
 
     if (request.BalanceMillimes < 0)
         return Results.BadRequest(new { error = "invalid_balance", message = "Balance cannot be negative." });
+
+    // LOT-3A / INP-01 : bornes alignées sur le schéma (Cards.Label varchar(120), CardAuditLogs.Reason varchar(256)).
+    // Sans ce contrôle, PostgreSQL lève 22001 (string_data_right_truncation) et l'API répond 500 au lieu de 400.
+    if (request.Label is not null && request.Label.Length > JanusSchemaLimits.CardLabelMaxLength)
+        return Results.BadRequest(new { error = "invalid_label", message = $"Label must not exceed {JanusSchemaLimits.CardLabelMaxLength} characters." });
+
+    if (request.Reason is not null && request.Reason.Trim().Length > JanusSchemaLimits.AuditReasonMaxLength)
+        return Results.BadRequest(new { error = "invalid_reason", message = $"Reason must not exceed {JanusSchemaLimits.AuditReasonMaxLength} characters." });
 
     // Validation stricte du statut si fourni (uniquement Active ou Revoked, insensible à la casse)
     CardStatus? requestedStatus = null;
@@ -894,7 +912,7 @@ app.MapPut("/api/cards/{uid}", async (string uid, CardUpsertRequest request, Cla
                 NewStatus = card.Status.ToString(),
                 Reason = auditReason,
                 Actor = actor,
-                CreatedAt = DateTimeOffset.UtcNow
+                CreatedAt = timeProvider.GetUtcNow()
             };
             db.CardAuditLogs.Add(audit);
 
