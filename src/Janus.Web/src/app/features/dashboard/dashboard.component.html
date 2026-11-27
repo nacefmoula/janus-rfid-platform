@@ -46,6 +46,22 @@
     </div>
   }
 
+  <!-- LOT-3C : synthèse financière réservée à l'administration -->
+  @if (session.activeRole() === 'TERMINAL') {
+    <div class="anonymous-session-banner terminal-restricted-banner">
+      <span class="banner-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </span>
+      <div class="banner-content">
+        <strong>Synthèse d'exploitation réservée à l'administration :</strong>
+        <span>Le profil <em>Opérateur Borne</em> peut valider des passages via le simulateur, mais les indicateurs financiers (débits cumulés, masse monétaire en circulation) ne sont visibles qu'avec le rôle <strong>Administrateur</strong>.</span>
+      </div>
+    </div>
+  }
+
   <!-- Message d'erreur éventuel -->
   @if (errorMessage()) {
     <div class="error-banner">

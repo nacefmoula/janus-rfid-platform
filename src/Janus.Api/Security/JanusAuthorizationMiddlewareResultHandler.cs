@@ -60,6 +60,7 @@ public class JanusAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewar
                 "/api/cards/{uid}" when context.Request.Method.Equals("PUT", StringComparison.OrdinalIgnoreCase) => "Terminal credentials cannot perform card administration.",
                 "/api/validations" => "Terminal credentials required for RFID validations.",
                 "/api/demo/cards" => "Terminal credentials cannot access the demo card registry.",
+                "/api/dashboard/summary" => "The operational financial summary is restricted to administrators.",
                 "/metrics" => "Administrative or scraping credentials required for metrics.",
                 _ => "Authenticated identity does not have permission for this resource."
             };

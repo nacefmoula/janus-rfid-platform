@@ -287,7 +287,8 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("TerminalOnly", p => p.RequireRole("Terminal").RequireClaim("permission", "validations:create"))
     .AddPolicy("AdminOnly", p => p.RequireRole("Admin").RequireClaim("permission", "cards:admin"))
     .AddPolicy("CardsRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "cards:read")))
-    .AddPolicy("DashboardRead", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "dashboard:read") || ctx.User.HasClaim("permission", "cards:read")))
+    // LOT-3C / SEC-19 : la synthèse d'exploitation expose des agrégats financiers (masse monétaire, total débité) -> administrateurs uniquement
+    .AddPolicy("DashboardRead", p => p.RequireRole("Admin").RequireClaim("permission", "dashboard:read"))
     .AddPolicy("AuditRead", p => p.RequireRole("Admin").RequireClaim("permission", "audit:read"))
     .AddPolicy("MetricsScrape", p => p.RequireAssertion(ctx => ctx.User.HasClaim("permission", "metrics:scrape") || ctx.User.IsInRole("Admin")));
 

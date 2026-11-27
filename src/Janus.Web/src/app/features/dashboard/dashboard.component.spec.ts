@@ -67,8 +67,8 @@ describe('DashboardComponent', () => {
     expect(banner?.textContent).toContain('Session requise');
   });
 
-  it('devrait charger les métriques après connexion Terminal et masquer la bannière anonyme', () => {
-    component.session.setTerminalToken('token-borne-123');
+  it('devrait charger les métriques après connexion Admin et masquer la bannière anonyme', () => {
+    component.session.setAdminToken('token-admin-123');
     fixture.detectChanges();
 
     expect(apiSpy.getMetricsSummary).toHaveBeenCalledTimes(1);
@@ -77,6 +77,20 @@ describe('DashboardComponent', () => {
 
     const banner: HTMLElement | null = fixture.nativeElement.querySelector('.anonymous-session-banner');
     expect(banner).toBeFalsy();
+  });
+
+  it('LOT-3C : en mode Terminal, n\'appelle pas la synthèse financière et affiche la bannière de restriction', () => {
+    component.session.setTerminalToken('token-borne-123');
+    fixture.detectChanges();
+
+    expect(apiSpy.getMetricsSummary).not.toHaveBeenCalled();
+    expect(component.metrics()).toBeNull();
+    expect(component.isLoading()).toBeFalse();
+    expect(component.postgresStatus.state).toBe('UNVERIFIED');
+    expect(component.postgresStatus.label).toBe('Non vérifié (réservé à l\'administration)');
+
+    const banner: HTMLElement | null = fixture.nativeElement.querySelector('.terminal-restricted-banner');
+    expect(banner?.textContent).toContain('réservée à l\'administration');
   });
 
   it('devrait calculer fidèlement le taux d\'acceptation et les compteurs lorsque les métriques sont renseignées', () => {
@@ -127,7 +141,7 @@ describe('DashboardComponent', () => {
     const summarySubject = new Subject<PrometheusMetricsSummary>();
     apiSpy.getMetricsSummary.and.returnValue(summarySubject.asObservable());
 
-    component.session.setTerminalToken('token-borne-123');
+    component.session.setAdminToken('token-admin-123');
     fixture.detectChanges();
 
     // En cours de chargement initial
@@ -186,7 +200,7 @@ describe('DashboardComponent', () => {
       statusText: 'Forbidden'
     })));
 
-    component.session.setTerminalToken('token-restricted-123');
+    component.session.setAdminToken('token-restricted-123');
     fixture.detectChanges();
 
     expect(component.postgresStatus.state).toBe('UNVERIFIED');
@@ -201,7 +215,7 @@ describe('DashboardComponent', () => {
   });
 
   it('réinitialise immédiatement le statut PostgreSQL lors de la déconnexion ou changement de rôle', () => {
-    component.session.setTerminalToken('token-borne-123');
+    component.session.setAdminToken('token-admin-123');
     fixture.detectChanges();
 
     expect(component.postgresStatus.state).toBe('OPERATIONAL');
@@ -222,7 +236,7 @@ describe('DashboardComponent', () => {
   });
 
   it('devrait purger sur clearTokens() et ignorer les réponses tardives issues d\'une ancienne session', () => {
-    component.session.setTerminalToken('token-borne-123');
+    component.session.setAdminToken('token-admin-123');
     expect(component.metrics()).not.toBeNull();
 
     const delayedSummary$ = new Subject<PrometheusMetricsSummary>();

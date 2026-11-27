@@ -326,9 +326,20 @@ public class SecurityHardeningTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, (await _client.GetAsync("/api/dashboard/summary")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await _client.GetAsync("/api/simulator/cards")).StatusCode);
 
-        // 2. Terminal 1 can read /api/dashboard/summary without admin or scrape token
+        // 2. LOT-3C : les terminaux n'ont plus accès aux agrégats financiers (403), seul l'administrateur lit la synthèse
+        foreach (var terminalToken in new[] { TerminalToken, Terminal02Token })
+        {
+            using var terminalDashReq = new HttpRequestMessage(HttpMethod.Get, "/api/dashboard/summary");
+            terminalDashReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", terminalToken);
+            using var terminalDashResp = await _client.SendAsync(terminalDashReq);
+            Assert.Equal(HttpStatusCode.Forbidden, terminalDashResp.StatusCode);
+            var forbiddenJson = await terminalDashResp.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("forbidden", forbiddenJson.GetProperty("error").GetString());
+            Assert.False(forbiddenJson.TryGetProperty("totalCirculatingBalanceMillimes", out _));
+        }
+
         using var dashReq = new HttpRequestMessage(HttpMethod.Get, "/api/dashboard/summary");
-        dashReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", TerminalToken);
+        dashReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AdminToken);
         var dashResp = await _client.SendAsync(dashReq);
         Assert.Equal(HttpStatusCode.OK, dashResp.StatusCode);
         var dashJson = await dashResp.Content.ReadFromJsonAsync<JsonElement>();
@@ -338,6 +349,7 @@ public class SecurityHardeningTests : IAsyncLifetime
         Assert.True(dashJson.TryGetProperty("rejectedValidations", out _));
         Assert.True(dashJson.TryGetProperty("conflictValidations", out _));
         Assert.True(dashJson.TryGetProperty("totalDebitedMillimes", out _));
+        Assert.True(dashJson.TryGetProperty("totalCirculatingBalanceMillimes", out _));
 
         // 3. Terminal 1 and Terminal 2 can read /api/simulator/cards with minimal fields only (no balanceMillimes)
         using var simReq = new HttpRequestMessage(HttpMethod.Get, "/api/simulator/cards?limit=1&offset=0");

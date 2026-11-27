@@ -64,6 +64,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.isLoading.set(false);
       return;
     }
+    // LOT-3C : la borne garde l'accès à la santé de l'API mais plus à la synthèse financière (chargée par loadDashboardData pour ADMIN uniquement)
     this.loadDashboardData();
   }
 
@@ -87,8 +88,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
       }
     });
 
-    // En mode ANONYMOUS, n'émet aucun appel vers /api/dashboard/summary (réservé aux rôles Terminal et Admin)
-    if (this.session.activeRole() === 'ANONYMOUS') {
+    // LOT-3C : /api/dashboard/summary est réservé au rôle Admin (agrégats financiers) ; aucun appel en ANONYMOUS ni en TERMINAL
+    if (this.session.activeRole() !== 'ADMIN') {
       this.metrics.set(null);
       this.isLoading.set(false);
       return;
@@ -108,7 +109,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.metrics.set(null);
         this.summaryError.set(err instanceof HttpErrorResponse ? err : (err instanceof Error ? err : new Error(String(err))));
         this.isLoading.set(false);
-        this.errorMessage.set('Impossible de charger la synthèse d\'exploitation (/api/dashboard/summary). Vérifiez votre jeton de session (Borne ou Admin).');
+        this.errorMessage.set('Impossible de charger la synthèse d\'exploitation (/api/dashboard/summary). Vérifiez votre jeton administrateur.');
       }
     });
   }
@@ -118,6 +119,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
       return {
         state: 'UNVERIFIED',
         label: 'Non vérifié (session requise)',
+        isOperational: false,
+        isError: false
+      };
+    }
+
+    if (this.session.activeRole() === 'TERMINAL') {
+      return {
+        state: 'UNVERIFIED',
+        label: 'Non vérifié (réservé à l\'administration)',
         isOperational: false,
         isError: false
       };
