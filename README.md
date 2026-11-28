@@ -4,7 +4,7 @@
 
 **Documentation officielle de référence du projet d'ingénierie — État vérifié au 27 novembre 2026**
 
-- **Branche de référence :** `main` (Lots 1 à 4 intégrés ; Lots 3A à 4 fusionnés par les PR #26 à #30, CI GitHub Actions verte sur `main`). **Lot 5A (organisations et bornes en base) : branche `feat/lot-5a-organizations-terminals`, PR #32 ouverte, en revue, non fusionnée** ; ce document décrit l'état de cette branche.
+- **Branche de référence :** `main` (Lots 1 à 5A et 5S intégrés ; PR #26 à #32 et #34 à #38, CI GitHub Actions verte sur `main`). Prochain lot : 6 (validation autonome des bornes, conception en cours) ; le lot 5B (Row-Level Security, opérateurs par organisation) est en pause.
 - **Jalons précédents :** Lot 2C.1 `849650e` (fin de la chaîne sécurité / résilience) ; `main` avant Lot 1 : `0bd75e6` (PR #25)
 - **Technologies principales :** ASP.NET Core 10 Minimal APIs (C# / `.NET 10.0`), Entity Framework Core 10.0.0, PostgreSQL 18, Angular 22.3 (TypeScript 6.0), Nginx 1.27 Alpine, OpenTelemetry 1.20, Prometheus v2.54.1, Grafana 11.2.0, Docker Compose, GitHub Actions, SonarCloud, Trivy v0.36.0.
 
@@ -672,7 +672,7 @@ docker compose down
 ## 12. Tests automatisés et validation
 
 ### 12.1 Vue d'ensemble des suites de tests et résultats vérifiés
-Les résultats ci-dessous ont été **effectivement exécutés et observés le 27 novembre 2026** (Lot 5A, branche `feat/lot-5a-organizations-terminals`) ; les suites Python s'exécutent dans la CI de la PR du Lot 5A sur une pile Docker isolée :
+Les résultats ci-dessous ont été **effectivement exécutés et observés le 27 novembre 2026** (Lot 5A, PR #32), en local et dans la CI GitHub Actions ; les suites Python ont été exécutées par la CI sur une pile Docker isolée :
 
 | Suite de validation | Commande exacte d'exécution | Résultat observé *(27 nov. 2026 — Lot 5A)* | Périmètre technique validé |
 | :--- | :--- | :---: | :--- |
@@ -747,7 +747,7 @@ Tous les lots ci-dessous forment une chaîne linéaire de **6 commits** entre `0
 
 > Les fichiers cités dans les lots 1 à 2C.1 correspondent à l'organisation du code de l'époque (logique dans `Program.cs`) ; depuis le Lot 4, cette logique est répartie dans `src/Janus.Domain` et `src/Janus.Api/Features/*` (voir §3.3).
 
-### 14.3 Lots de correction financière, d'architecture et multi-organisation (Lots 3A à 5A)
+### 14.3 Lots de correction financière, d'architecture, multi-organisation et dépendances (Lots 3A à 5S)
 
 Ces lots font suite à l'analyse complète du dépôt ([`docs/ANALYSE_PROJET.md`](docs/ANALYSE_PROJET.md)) et corrigent en priorité les risques financiers identifiés.
 
@@ -758,14 +758,15 @@ Ces lots font suite à l'analyse complète du dépôt ([`docs/ANALYSE_PROJET.md`
 | **Lot 3C** | #28 | Sécurité : synthèse financière `GET /api/dashboard/summary` réservée aux administrateurs (`403` pour les bornes), bannière dédiée dans l'interface. | [`SecurityServiceCollectionExtensions.cs`](src/Janus.Api/Security/SecurityServiceCollectionExtensions.cs), [`dashboard.component.ts`](src/Janus.Web/src/app/features/dashboard/dashboard.component.ts) | **Validé et intégré** |
 | **Lot 3D** | #29 | Garde de solde obligatoire (`428 expected_balance_required`) pour toute correction absolue ; l'interface ne réécrit plus jamais le solde (recharge par crédit idempotent avec `operationId` réutilisé lors d'un nouvel essai) ; suppression de la fausse erreur `libgssapi_krb5` (`GSS Encryption Mode=Disable`). | [`CardsEndpoints.cs`](src/Janus.Api/Features/Cards/CardsEndpoints.cs), [`cards.component.ts`](src/Janus.Web/src/app/features/cards/cards.component.ts), [`compose.yaml`](compose.yaml) | **Validé et intégré** |
 | **Lot 4** | #30 | Architecture : monolithe modulaire (`Janus.Domain` pur + `Janus.Api/Features/*`), `Program.cs` de 1638 à 44 lignes, `FinancialTransactionRunner` unique, droits PostgreSQL par règle, `TreatWarningsAsErrors`, 47 tests unitaires du domaine. | [`src/Janus.Domain/`](src/Janus.Domain/), [`FinancialTransactionRunner.cs`](src/Janus.Api/Infrastructure/Persistence/FinancialTransactionRunner.cs), [`tests/Janus.Domain.Tests/`](tests/Janus.Domain.Tests/) | **Validé et intégré** |
-| **Lot 5A** | #32 | Multi-organisation, première étape : organisations et bornes en base (jetons opaques hachés, expirants, révocables sans cache), organisation suspendue, audit *append-only* des bornes, `OrganizationId` sur toutes les tables (migration sans `UPDATE`), isolation des cartes entre organisations, clés étrangères composites, droits PostgreSQL par colonne (plus aucun `UPDATE` de table entière), retrait du label Prometheus `terminal_id`. | [`TerminalEndpoints.cs`](src/Janus.Api/Features/Terminals/TerminalEndpoints.cs), [`JanusTokenAuthHandler.cs`](src/Janus.Api/Security/JanusTokenAuthHandler.cs), [`OrganizationsAndTerminalsTests.cs`](tests/Janus.Api.Tests/OrganizationsAndTerminalsTests.cs) | **En revue (non fusionné)** |
+| **Lot 5A** | #32 | Multi-organisation, première étape : organisations et bornes en base (jetons opaques hachés, expirants, révocables sans cache), organisation suspendue, audit *append-only* des bornes, `OrganizationId` sur toutes les tables (migration sans `UPDATE`), isolation des cartes entre organisations, clés étrangères composites, droits PostgreSQL par colonne (plus aucun `UPDATE` de table entière), retrait du label Prometheus `terminal_id`. | [`TerminalEndpoints.cs`](src/Janus.Api/Features/Terminals/TerminalEndpoints.cs), [`JanusTokenAuthHandler.cs`](src/Janus.Api/Security/JanusTokenAuthHandler.cs), [`OrganizationsAndTerminalsTests.cs`](tests/Janus.Api.Tests/OrganizationsAndTerminalsTests.cs) | **Validé et intégré** |
+| **Lot 5S** | #34 à #38 | Dépendances : correctifs de niveau patch (vite, follow-redirects, fast-uri, body-parser), passage aux builders `@angular/build` (suppression de la chaîne webpack, 381 paquets), puis Angular 19 → 20.3 → 21.2 → 22.3 et TypeScript 6.0 (Karma conservé). Les 26 alertes Dependabot sont closes et `npm audit` ne signale aucune vulnérabilité. | [`src/Janus.Web/package.json`](src/Janus.Web/package.json), [`src/Janus.Web/angular.json`](src/Janus.Web/angular.json) | **Validé et intégré** |
 
 ---
 
 ## 15. État du projet au 27 novembre 2026 — documentation de référence
 
 ### 15.1 Références Git exactes documentées
-- **État courant :** `main` intègre les Lots 1 à 4 (PR #26 à #30 fusionnées le 27 novembre 2026, CI verte).
+- **État courant :** `main` intègre les Lots 1 à 5A (PR #26 à #32) et le lot 5S de dépendances (PR #34 à #38), fusionnés le 27 novembre 2026, CI verte.
 - **Fin de la chaîne de sécurité et de résilience (historique) :** `fix/lot-2c1-migrator-exit-and-prod-guards` (`849650ed5c5decd8cbe66187757bafc557b66894`)
 - **Parent fonctionnel du Lot 2C.1 :** `77c9f0f40338ea00df32494715f75ea7ce3c132e` (`feat/lot-2c-transactional-resilience`)
 - **Base historique `main` antérieure au Lot 1 :** `0bd75e681cc163c0652ff031820fb76b365723df`
@@ -779,7 +780,7 @@ Ces lots font suite à l'analyse complète du dépôt ([`docs/ANALYSE_PROJET.md`
 
 ### 15.2 Feuille de route (Roadmap) et critères de passage vers une qualification de production
 Avant toute qualification pour une exploitation réelle, les travaux suivants doivent être menés :
-1. **Multi-organisation :** Lot 5A `EN REVUE` (organisations, bornes enrôlées et révocables, `OrganizationId` partout, isolation des cartes ; les codes de borne étant uniques sur la plateforme, la clé d'idempotence `(TerminalId, EventId)` reste inchangée). Lot 5B `PLANIFIÉ` : Row-Level Security PostgreSQL, opérateurs administrateurs par organisation (une réponse `organization_mismatch` ne devra alors jamais révéler à une organisation qu'une carte existe ailleurs), suspension et réactivation des organisations avec audit, rotation du jeton d'une borne.
+1. **Multi-organisation :** Lot 5A `IMPLÉMENTÉ ET TESTÉ` (PR #32) (organisations, bornes enrôlées et révocables, `OrganizationId` partout, isolation des cartes ; les codes de borne étant uniques sur la plateforme, la clé d'idempotence `(TerminalId, EventId)` reste inchangée). Lot 5B `EN PAUSE` (priorité donnée au lot 6, validation autonome des bornes) : Row-Level Security PostgreSQL, opérateurs administrateurs par organisation (une réponse `organization_mismatch` ne devra alors jamais révéler à une organisation qu'une carte existe ailleurs), suspension et réactivation des organisations avec audit, rotation du jeton d'une borne.
 2. **Terminaison TLS / HTTPS et HSTS (`PLANIFIÉ`) :** configurer TLS 1.2/1.3 avec certificats valides sur le reverse proxy ou un ingress amont et activer `Strict-Transport-Security`.
 3. **Gestionnaire de secrets et rotation des jetons (`PLANIFIÉ`) :** remplacer les jetons statiques de configuration par des jetons signés à durée de vie courte (JWT/mTLS) ou gérés via un coffre-fort de secrets (Vault / KMS).
 4. **Rôle de migration non-superutilisateur en production (`PLANIFIÉ`) :** utiliser sur PostgreSQL de production un rôle propriétaire dédié `NOSUPERUSER` pour `db-migrator` au lieu du compte superutilisateur initial du conteneur.
